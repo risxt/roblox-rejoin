@@ -51,6 +51,7 @@ DEFAULT_CONFIG = {
     "ram_path": r"C:\Users\faris\OneDrive\Desktop\Roblox.Account.Manager.3.7.2",
     "ram_exe": "Roblox Account Manager.exe",
     "webserver_port": 7963,
+    "webserver_password": "1107",
     "place_id": 121864768012064,
     "job_id": "",
     "check_interval": 60,
@@ -59,14 +60,16 @@ DEFAULT_CONFIG = {
 
 # ============ RAM WEB SERVER API ============
 class RAMController:
-    def __init__(self, port=7963):
+    def __init__(self, port=7963, password=""):
         self.port = port
+        self.password = password
         self.base_url = f"http://localhost:{port}"
     
     def is_online(self):
         """Check if RAM Web Server is online"""
         try:
-            r = requests.get(f"{self.base_url}/GetAccounts", timeout=5)
+            params = {"Password": self.password} if self.password else {}
+            r = requests.get(f"{self.base_url}/GetAccounts", params=params, timeout=5)
             return r.status_code == 200
         except:
             return False
@@ -74,7 +77,8 @@ class RAMController:
     def get_accounts(self):
         """Get list of accounts from RAM"""
         try:
-            r = requests.get(f"{self.base_url}/GetAccounts", timeout=10)
+            params = {"Password": self.password} if self.password else {}
+            r = requests.get(f"{self.base_url}/GetAccounts", params=params, timeout=10)
             if r.status_code == 200:
                 data = r.json()
                 if data.get("Success"):
@@ -92,6 +96,8 @@ class RAMController:
                 "Account": username,
                 "PlaceId": place_id
             }
+            if self.password:
+                params["Password"] = self.password
             if job_id:
                 params["JobId"] = job_id
             
@@ -277,7 +283,8 @@ def main():
     
     # Step 3: Wait for Web Server
     print(f"\n{C.B}[3/4] Waiting for Web Server...{C.X}")
-    ram = RAMController(config.get('webserver_port', 7963))
+    password = config.get('webserver_password', '')
+    ram = RAMController(config.get('webserver_port', 7963), password)
     
     max_retries = 30
     for i in range(max_retries):
