@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Roblox Multi-Instance Tool v1.0
+Roblox Multi-Instance Tool v1.1
 Launch multiple Roblox accounts and auto-rejoin
 
 Features:
 - Load cookies from file (1 per line)
-- Launch multiple instances
-- Monitor all instances
+- Launch multiple instances with auth ticket
+- Monitor RobloxPlayerBeta.exe processes
 - Auto-rejoin when DC
 
 USAGE:
@@ -19,7 +19,6 @@ import time
 import sys
 import os
 import subprocess
-import threading
 import requests
 from datetime import datetime
 
@@ -47,7 +46,7 @@ DEFAULT_CONFIG = {
     "place_id": 121864768012064,
     "job_id": "",
     "check_interval": 60,
-    "launch_delay": 5,
+    "launch_delay": 8,
     "rejoin_delay": 10,
     "cookies_file": "cookies.txt"
 }
@@ -60,132 +59,162 @@ class Instance:
         self.pid = None
         self.running = False
         self.rejoins = 0
-        self.last_check = None
         self.username = f"Account_{index}"
+        self.launched = False
 
 instances = []
 running = True
 
 # ============ ROBLOX API ============
+def validate_cookie(cookie):
+    """Check if cookie is valid"""
+    try:
+        session = requests.Session()
+        session.cookies.set(".ROBLOSECURITY", cookie, domain=".roblox.com")
+        r = session.get("https://users.roblox.com/v1/users/authenticated", timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return True, data.get("name", "Unknown"), data.get("id", 0)
+        elif r.status_code == 401:
+            return False, "Expired/Invalid Cookie", 0
+        else:
+            return False, f"Error {r.status_code}", 0
+    except Exception as e:
+        return False, str(e), 0
+
 def get_auth_ticket(cookie):
     """Get authentication ticket using cookie"""
     session = requests.Session()
     session.cookies.set(".ROBLOSECURITY", cookie, domain=".roblox.com")
-    
-    # Get CSRF token
-    try:
-        r = session.post("https://auth.roblox.com/v2/logout")
-        csrf = r.headers.get("x-csrf-token", "")
-    except:
-        csrf = ""
-    
-    headers = {
-        "x-csrf-token": csrf,
+    session.headers.update({
+        "User-Agent": "Roblox/WinInet",
         "Referer": "https://www.roblox.com/"
-    }
+    })
     
+    # First request to get CSRF token
     try:
-        r = session.post(
-            "https://auth.roblox.com/v1/authentication-ticket/",
-            headers=headers
-        )
+        r = session.post("https://auth.roblox.com/v1/authentication-ticket/")
+        csrf = r.headers.get("x-csrf-token", "")
         
-        if r.status_code == 403:
-            csrf = r.headers.get("x-csrf-token", "")
-            headers["x-csrf-token"] = csrf
-            r = session.post(
-                "https://auth.roblox.com/v1/authentication-ticket/",
-                headers=headers
-            )
+        if not csrf:
+            print(f"{C.R}      [DEBUG] No CSRF token received{C.X}")
+            return None
+        
+        # Second request with CSRF token
+        session.headers["x-csrf-token"] = csrf
+        r = session.post("https://auth.roblox.com/v1/authentication-ticket/")
         
         ticket = r.headers.get("rbx-authentication-ticket")
-        return ticket
+        
+        if ticket:
+            print(f"{C.G}      [DEBUG] Got auth ticket!{C.X}")
+            return ticket
+        else:
+            print(f"{C.R}      [DEBUG] No ticket. Status: {r.status_code}, Response: {r.text[:100]}{C.X}")
+            return None
+            
     except Exception as e:
-        print(f"{C.R}[!] Auth error: {e}{C.X}")
+        print(f"{C.R}      [DEBUG] Auth error: {e}{C.X}")
         return None
 
-def get_username(cookie):
-    """Get username from cookie"""
-    try:
-        session = requests.Session()
-        session.cookies.set(".ROBLOSECURITY", cookie, domain=".roblox.com")
-        r = session.get("https://users.roblox.com/v1/users/authenticated")
-        if r.status_code == 200:
-            return r.json().get("name", "Unknown")
-    except:
-        pass
-    return "Unknown"
-
 # ============ LAUNCHER ============
-def launch_roblox(place_id, job_id="", auth_ticket=None):
-    """Launch Roblox with auth ticket"""
+def launch_roblox_with_ticket(place_id, auth_ticket, job_id=""):
+    """Launch Roblox game with proper protocol"""
     
-    # Build URL based on job_id type
+    # Build the launch URL
+    # Format: roblox-player:1+launchmode:play+gameinfo:<ticket>+placelauncherurl:<encoded_url>
+    
     if job_id and ("roblox.com/share" in job_id or "ro.blox.com" in job_id):
+        # Private server - use link directly
         url = job_id
-    elif job_id:
-        url = f"roblox://placeId={place_id}&gameInstanceId={job_id}"
-    else:
-        url = f"roblox://placeId={place_id}"
+        try:
+            subprocess.Popen(f'start "" "{url}"', shell=True)
+            return True
+        except:
+            return False
     
-    # Add auth ticket if available
-    if auth_ticket:
-        if "?" in url:
-            url += f"&ticket={auth_ticket}"
-        else:
-            url += f"?ticket={auth_ticket}"
+    # Build proper Roblox player URL
+    import urllib.parse
+    
+    launcher_url = f"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGame&placeId={place_id}"
+    if job_id:
+        launcher_url += f"&gameId={job_id}"
+    
+    encoded_url = urllib.parse.quote(launcher_url, safe='')
+    
+    # Method 1: Direct roblox:// protocol
+    roblox_url = f"roblox://placeId={place_id}"
+    if job_id:
+        roblox_url += f"&gameInstanceId={job_id}"
+    
+    print(f"{C.B}      [DEBUG] Launching: {roblox_url[:60]}...{C.X}")
     
     try:
-        # Launch via start command
-        subprocess.Popen(f'start "" "{url}"', shell=True)
+        os.system(f'start "" "{roblox_url}"')
         return True
-    except:
+    except Exception as e:
+        print(f"{C.R}      [DEBUG] Launch error: {e}{C.X}")
         return False
 
-def get_roblox_pids():
-    """Get all Roblox process IDs"""
-    pids = []
-    for proc in psutil.process_iter(['pid', 'name']):
+# ============ PROCESS MONITOR ============
+def get_roblox_player_count():
+    """Count only RobloxPlayerBeta.exe processes"""
+    count = 0
+    for proc in psutil.process_iter(['name']):
         try:
-            if 'roblox' in proc.info['name'].lower():
-                pids.append(proc.info['pid'])
+            name = proc.info['name']
+            if name and name.lower() == 'robloxplayerbeta.exe':
+                count += 1
         except:
             continue
-    return pids
+    return count
 
-def count_roblox_instances():
-    """Count running Roblox instances"""
-    return len(get_roblox_pids())
+def list_roblox_processes():
+    """List all Roblox-related processes for debugging"""
+    processes = []
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            name = proc.info['name']
+            if name and 'roblox' in name.lower():
+                processes.append(f"{name} (PID: {proc.info['pid']})")
+        except:
+            continue
+    return processes
 
 # ============ COOKIE MANAGER ============
 def load_cookies(filepath):
     """Load cookies from file"""
     cookies = []
     if not os.path.exists(filepath):
-        # Create sample file
         with open(filepath, 'w') as f:
-            f.write("# Paste your cookies here, one per line\n")
+            f.write("# Paste your .ROBLOSECURITY cookies here, one per line\n")
             f.write("# Lines starting with # are comments\n")
+            f.write("# \n")
             f.write("# Example:\n")
-            f.write("# _|WARNING:-DO-NOT-SHARE-THIS...\n")
+            f.write("# _|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow...\n")
         return []
     
     with open(filepath, 'r') as f:
         for line in f:
             line = line.strip()
             if line and not line.startswith('#'):
-                cookies.append(line)
+                # Clean cookie
+                if line.startswith('_|WARNING'):
+                    cookies.append(line)
+                elif len(line) > 100:  # Likely a valid cookie
+                    cookies.append(line)
     
     return cookies
 
 # ============ MAIN LOGIC ============
 def banner():
     print(f"""
-{C.C}╔═══════════════════════════════════════════╗
-║   ROBLOX MULTI-INSTANCE TOOL v1.0         ║
-╠═══════════════════════════════════════════╣
-║   Launch multiple accounts + Auto-Rejoin  ║
-╚═══════════════════════════════════════════╝{C.X}
+{C.C}╔════════════════════════════════════════════╗
+║   ROBLOX MULTI-INSTANCE TOOL v1.1          ║
+╠════════════════════════════════════════════╣
+║   Launch multiple accounts + Auto-Rejoin   ║
+║   Fixed: Auth ticket & process monitoring  ║
+╚════════════════════════════════════════════╝{C.X}
     """)
 
 def load_config():
@@ -227,54 +256,68 @@ def setup_interactive(config):
     if inp:
         config['launch_delay'] = int(inp)
     
-    inp = input(f"Cookies file [{config['cookies_file']}]: ").strip()
-    if inp:
-        config['cookies_file'] = inp
-    
     save_config(config)
     print(f"{C.G}\nConfig saved!{C.X}")
     return config
 
-def launch_all(config, cookies):
-    """Launch all accounts"""
+def validate_all_cookies(cookies):
+    """Validate all cookies and return valid ones"""
+    print(f"\n{C.B}[*] Validating {len(cookies)} cookies...{C.X}")
+    valid = []
+    
+    for i, cookie in enumerate(cookies):
+        is_valid, username, user_id = validate_cookie(cookie)
+        if is_valid:
+            print(f"{C.G}    [{i+1}] ✓ {username} (ID: {user_id}){C.X}")
+            valid.append((cookie, username))
+        else:
+            print(f"{C.R}    [{i+1}] ✗ {username}{C.X}")
+    
+    print(f"\n{C.B}[*] Valid cookies: {len(valid)}/{len(cookies)}{C.X}")
+    return valid
+
+def launch_all(config, valid_cookies):
+    """Launch all valid accounts"""
     global instances
     
     place_id = config['place_id']
     job_id = config.get('job_id', '')
-    delay = config.get('launch_delay', 5)
+    delay = config.get('launch_delay', 8)
     
-    print(f"\n{C.B}[*] Launching {len(cookies)} accounts...{C.X}")
+    print(f"\n{C.B}[*] Launching {len(valid_cookies)} accounts...{C.X}")
     
-    for i, cookie in enumerate(cookies):
+    launched_count = 0
+    
+    for i, (cookie, username) in enumerate(valid_cookies):
         inst = Instance(cookie, i + 1)
-        
-        # Get username
-        username = get_username(cookie)
         inst.username = username
         
-        print(f"{C.Y}[{i+1}/{len(cookies)}] Launching {username}...{C.X}")
+        print(f"{C.Y}[{i+1}/{len(valid_cookies)}] Launching {username}...{C.X}")
         
         # Get auth ticket
         ticket = get_auth_ticket(cookie)
         
         if ticket:
-            launch_roblox(place_id, job_id, ticket)
-            inst.running = True
-            print(f"{C.G}    ✓ Launched!{C.X}")
+            success = launch_roblox_with_ticket(place_id, ticket, job_id)
+            if success:
+                inst.launched = True
+                launched_count += 1
+                print(f"{C.G}    ✓ Launched successfully!{C.X}")
         else:
-            print(f"{C.R}    ✗ Failed to get auth ticket{C.X}")
-            # Try launching without ticket (will prompt login)
-            launch_roblox(place_id, job_id)
+            print(f"{C.R}    ✗ Failed to get auth ticket - trying without...{C.X}")
+            # Try anyway with just the URL
+            launch_roblox_with_ticket(place_id, None, job_id)
         
         instances.append(inst)
         
-        if i < len(cookies) - 1:
-            print(f"{C.B}    Waiting {delay}s...{C.X}")
+        if i < len(valid_cookies) - 1:
+            print(f"{C.B}    Waiting {delay}s before next launch...{C.X}")
             time.sleep(delay)
     
-    print(f"\n{C.G}[✓] All accounts launched!{C.X}")
+    print(f"\n{C.G}[✓] Launched {launched_count}/{len(valid_cookies)} accounts!{C.X}")
+    return launched_count
 
-def monitor_loop(config):
+def monitor_loop(config, expected_count):
     """Monitor and auto-rejoin"""
     global running, instances
     
@@ -282,44 +325,53 @@ def monitor_loop(config):
     job_id = config.get('job_id', '')
     interval = config.get('check_interval', 60)
     rejoin_delay = config.get('rejoin_delay', 10)
-    expected = len(instances)
     
-    print(f"\n{C.G}[*] Monitoring {expected} instances...{C.X}")
+    print(f"\n{C.G}[*] Monitoring for {expected_count} RobloxPlayerBeta.exe processes...{C.X}")
     print(f"{C.Y}[!] Press Ctrl+C to stop{C.X}\n")
+    
+    # Wait for games to fully load
+    print(f"{C.B}[*] Waiting 20s for games to load...{C.X}")
+    time.sleep(20)
     
     total_rejoins = 0
     
     try:
         while running:
-            current = count_roblox_instances()
+            current = get_roblox_player_count()
             now = datetime.now().strftime("%H:%M:%S")
             
-            if current >= expected:
-                print(f"{C.G}[✓] [{now}] All {current} instances running. Next check in {interval}s{C.X}")
+            # Debug: show all Roblox processes
+            procs = list_roblox_processes()
+            
+            if current >= expected_count:
+                print(f"{C.G}[✓] [{now}] {current}/{expected_count} instances running. Next check in {interval}s{C.X}")
+            elif current > 0:
+                missing = expected_count - current
+                print(f"{C.Y}[!] [{now}] {current}/{expected_count} running. {missing} may still be loading...{C.X}")
             else:
-                missing = expected - current
-                total_rejoins += missing
-                print(f"{C.R}[!] [{now}] {missing} instance(s) DC'd! Rejoining...{C.X}")
+                print(f"{C.R}[!] [{now}] No instances running! All may have DC'd.{C.X}")
                 
-                time.sleep(rejoin_delay)
-                
-                # Rejoin missing instances
-                for i in range(missing):
-                    if i < len(instances):
-                        inst = instances[i]
-                        inst.rejoins += 1
-                        print(f"{C.Y}    Rejoining {inst.username}...{C.X}")
-                        ticket = get_auth_ticket(inst.cookie)
-                        launch_roblox(place_id, job_id, ticket)
-                        time.sleep(3)
-                
-                print(f"{C.G}    Done! Total rejoins: {total_rejoins}{C.X}")
+                # Only rejoin if we had instances before
+                if expected_count > 0:
+                    total_rejoins += 1
+                    print(f"{C.Y}    Attempting rejoin for all accounts...{C.X}")
+                    
+                    time.sleep(rejoin_delay)
+                    
+                    for inst in instances:
+                        if inst.launched:
+                            print(f"{C.Y}    Rejoining {inst.username}...{C.X}")
+                            ticket = get_auth_ticket(inst.cookie)
+                            launch_roblox_with_ticket(place_id, ticket, job_id)
+                            time.sleep(5)
+                    
+                    print(f"{C.G}    Rejoin attempt #{total_rejoins} complete.{C.X}")
             
             time.sleep(interval)
             
     except KeyboardInterrupt:
         running = False
-        print(f"\n\n{C.Y}[*] Stopped. Total rejoins: {total_rejoins}{C.X}")
+        print(f"\n\n{C.Y}[*] Stopped. Total rejoin attempts: {total_rejoins}{C.X}")
 
 def main():
     global running
@@ -333,13 +385,13 @@ def main():
     
     print(f"{C.B}[*] Current Config:{C.X}")
     print(f"    PlaceId:  {config['place_id']}")
-    print(f"    JobId:    {config.get('job_id', '') or '(random)'}")
+    print(f"    JobId:    {config.get('job_id', '') or '(random server)'}")
     print(f"    Interval: {config['check_interval']}s")
     print(f"    Cookies:  {len(cookies)} loaded from {config['cookies_file']}")
     
     if len(cookies) == 0:
         print(f"\n{C.R}[!] No cookies found!{C.X}")
-        print(f"    Edit {config['cookies_file']} and add your cookies (1 per line)")
+        print(f"    Edit {config['cookies_file']} and add your .ROBLOSECURITY cookies (1 per line)")
         print(f"    Then run this script again.")
         return
     
@@ -347,12 +399,26 @@ def main():
     if inp == 'y':
         config = setup_interactive(config)
     
-    # Launch all
-    launch_all(config, cookies)
+    # Validate cookies first
+    valid_cookies = validate_all_cookies(cookies)
     
-    # Start monitoring
-    time.sleep(10)  # Wait for games to load
-    monitor_loop(config)
+    if len(valid_cookies) == 0:
+        print(f"\n{C.R}[!] No valid cookies! Check your cookies.txt file.{C.X}")
+        return
+    
+    inp = input(f"\n{C.Y}Continue with {len(valid_cookies)} valid accounts? (y/n): {C.X}").strip().lower()
+    if inp != 'y':
+        print("Cancelled.")
+        return
+    
+    # Launch all
+    launched = launch_all(config, valid_cookies)
+    
+    if launched > 0:
+        # Start monitoring
+        monitor_loop(config, launched)
+    else:
+        print(f"\n{C.R}[!] No accounts were launched successfully.{C.X}")
 
 if __name__ == "__main__":
     main()
