@@ -48,8 +48,8 @@ if os.name == 'nt':
 
 # ============ CONFIG ============
 DEFAULT_CONFIG = {
-    "ram_path": r"C:\Users\faris\Downloads\Compressed\Roblox.Account.Manager.3.7.2_2",
-    "ram_exe": "Roblox Account Manager.backup.exe",
+    "ram_path": r"C:\Users\faris\OneDrive\Desktop\Roblox.Account.Manager.3.7.2",
+    "ram_exe": "Roblox Account Manager.exe",
     "webserver_port": 7963,
     "place_id": 121864768012064,
     "job_id": "",
