@@ -300,16 +300,18 @@ def launch_all(config, valid_cookies):
         # Get auth ticket
         ticket = get_auth_ticket(cookie)
         
-        if ticket:
-            success = launch_roblox_with_ticket(place_id, ticket, job_id)
-            if success:
-                inst.launched = True
-                launched_count += 1
-                print(f"{C.G}    ✓ Launched successfully!{C.X}")
+        # Launch anyway - with or without ticket
+        success = launch_roblox_with_ticket(place_id, ticket, job_id)
+        
+        if success:
+            inst.launched = True
+            launched_count += 1
+            if ticket:
+                print(f"{C.G}    ✓ Launched with auth ticket!{C.X}")
+            else:
+                print(f"{C.Y}    ⚠ Launched without auth ticket (may need manual login){C.X}")
         else:
-            print(f"{C.R}    ✗ Failed to get auth ticket - trying without...{C.X}")
-            # Try anyway with just the URL
-            launch_roblox_with_ticket(place_id, None, job_id)
+            print(f"{C.R}    ✗ Launch failed{C.X}")
         
         instances.append(inst)
         
