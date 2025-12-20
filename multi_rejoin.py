@@ -149,54 +149,28 @@ def build_deep_link(place_id, link_code):
     else:
         return f"roblox://placeId={place_id}"
 
-# ============ FREEFORM LAUNCHER ============
-def launch_freeform(package, deep_link, activity=".startup.ActivitySplash"):
+# ============ LAUNCHER ============
+def launch_game(package, deep_link, activity=".startup.ActivitySplash"):
     """
-    Launch Roblox in freeform window mode
-    Uses --windowingMode 5 for freeform
+    Launch Roblox with deep link
     """
     try:
-        # Build AM command for freeform launch
-        cmd = [
-            "am", "start",
-            "-a", "android.intent.action.VIEW",
-            "-d", deep_link,
-            "-p", package,
-            "--windowingMode", "5",  # Freeform mode
-            "--activityType", "1"
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print(f"{C.G}[✓] Launched {package} in freeform mode{C.X}")
-            return True
-        else:
-            # Fallback: try without freeform flags
-            print(f"{C.Y}[*] Trying fallback launch for {package}...{C.X}")
-            return launch_fallback(package, deep_link, activity)
-            
-    except Exception as e:
-        print(f"{C.R}[!] Launch error for {package}: {e}{C.X}")
-        return launch_fallback(package, deep_link, activity)
-
-def launch_fallback(package, deep_link, activity):
-    """Fallback launch method without freeform flags"""
-    try:
+        # Method 1: Launch with deep link
         cmd = f'am start -a android.intent.action.VIEW -d "{deep_link}" -p {package}'
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
         if result.returncode == 0:
+            print(f"{C.G}[✓] Launched {package}{C.X}")
+            return True
+        else:
+            # Fallback: direct activity launch
+            cmd2 = f'am start -n {package}/{activity}'
+            subprocess.run(cmd2, shell=True)
             print(f"{C.G}[✓] Launched {package} (fallback){C.X}")
             return True
-        
-        # Last resort: direct activity launch
-        cmd2 = f'am start -n {package}/{activity}'
-        subprocess.run(cmd2, shell=True)
-        return True
-        
+            
     except Exception as e:
-        print(f"{C.R}[!] Fallback launch failed for {package}: {e}{C.X}")
+        print(f"{C.R}[!] Launch error for {package}: {e}{C.X}")
         return False
 
 def force_stop(package):
@@ -208,11 +182,11 @@ def force_stop(package):
 
 # ============ MONITOR ============
 def is_running(package):
-    """Check if a Roblox package is running"""
+    """Check if a Roblox package is running - improved for floating windows"""
     try:
-        # Method 1: pgrep
+        # Method 1: pidof (most reliable for Android)
         result = subprocess.run(
-            f"pgrep -f {package}",
+            f"pidof {package}",
             shell=True,
             capture_output=True,
             text=True
@@ -220,9 +194,9 @@ def is_running(package):
         if result.returncode == 0 and result.stdout.strip():
             return True
         
-        # Method 2: ps grep
+        # Method 2: Check /proc for process
         result = subprocess.run(
-            f"ps -A | grep {package}",
+            f"ls /proc | xargs -I{{}} cat /proc/{{}}/cmdline 2>/dev/null | grep -a {package}",
             shell=True,
             capture_output=True,
             text=True
@@ -230,24 +204,48 @@ def is_running(package):
         if result.stdout.strip():
             return True
         
-        # Method 3: dumpsys activity
+        # Method 3: dumpsys window (for floating/freeform windows)
         result = subprocess.run(
-            f"dumpsys activity activities | grep {package}",
+            f"dumpsys window windows | grep -i {package}",
             shell=True,
             capture_output=True,
             text=True
         )
-        return bool(result.stdout.strip())
+        if result.stdout.strip():
+            return True
+        
+        # Method 4: dumpsys activity (task stack)
+        result = subprocess.run(
+            f"dumpsys activity recents | grep {package}",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.stdout.strip():
+            # Check if it's actually running, not just in recents
+            result2 = subprocess.run(
+                f"dumpsys activity processes | grep {package}",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if result2.stdout.strip():
+                return True
+        
+        # Method 5: am stack list (check freeform stack)
+        result = subprocess.run(
+            "am stack list 2>/dev/null | grep -i freeform",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.stdout and package in result.stdout:
+            return True
+        
+        return False
         
     except:
         return False
-
-def check_all_instances(packages):
-    """Check running status of all instances"""
-    status = {}
-    for pkg in packages:
-        status[pkg] = is_running(pkg)
-    return status
 
 # ============ CONFIG ============
 def load_config():
@@ -406,7 +404,7 @@ def main():
     print(f"{C.B}[*] Launching all instances...{C.X}\n")
     for i, pkg in enumerate(packages):
         print(f"{C.M}[{i+1}/{len(packages)}] Launching {pkg}...{C.X}")
-        launch_freeform(pkg, deep_link, activity)
+        launch_game(pkg, deep_link, activity)
         time.sleep(2)  # Small delay between launches
     
     print(f"\n{C.G}[✓] All instances launched! Waiting for games to load...{C.X}")
@@ -443,7 +441,7 @@ def main():
                     time.sleep(delay)
                     force_stop(pkg)
                     time.sleep(1)
-                    launch_freeform(pkg, deep_link, activity)
+                    launch_game(pkg, deep_link, activity)
                     time.sleep(5)
                     
                     # Check if rejoin successful
