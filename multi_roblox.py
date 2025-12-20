@@ -86,14 +86,17 @@ def get_auth_ticket(cookie):
     """Get authentication ticket using cookie"""
     session = requests.Session()
     session.cookies.set(".ROBLOSECURITY", cookie, domain=".roblox.com")
-    session.headers.update({
+    
+    headers = {
         "User-Agent": "Roblox/WinInet",
-        "Referer": "https://www.roblox.com/"
-    })
+        "Referer": "https://www.roblox.com/",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
     
     # First request to get CSRF token
     try:
-        r = session.post("https://auth.roblox.com/v1/authentication-ticket/")
+        r = session.post("https://auth.roblox.com/v1/authentication-ticket/", headers=headers)
         csrf = r.headers.get("x-csrf-token", "")
         
         if not csrf:
@@ -101,8 +104,8 @@ def get_auth_ticket(cookie):
             return None
         
         # Second request with CSRF token
-        session.headers["x-csrf-token"] = csrf
-        r = session.post("https://auth.roblox.com/v1/authentication-ticket/")
+        headers["x-csrf-token"] = csrf
+        r = session.post("https://auth.roblox.com/v1/authentication-ticket/", headers=headers)
         
         ticket = r.headers.get("rbx-authentication-ticket")
         
@@ -110,7 +113,7 @@ def get_auth_ticket(cookie):
             print(f"{C.G}      [DEBUG] Got auth ticket!{C.X}")
             return ticket
         else:
-            print(f"{C.R}      [DEBUG] No ticket. Status: {r.status_code}, Response: {r.text[:100]}{C.X}")
+            print(f"{C.R}      [DEBUG] No ticket. Status: {r.status_code}{C.X}")
             return None
             
     except Exception as e:
