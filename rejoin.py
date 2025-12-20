@@ -36,23 +36,49 @@ class C:
 
 # ============ LAUNCHER ============
 def launch_game(package, activity, place_id, job_id=""):
-    url = f"roblox://placeId={place_id}"
-    if job_id:
-        url += f"&gameInstanceId={job_id}"
+    # If job_id is a share link, use it directly
+    if job_id and ("roblox.com/share" in job_id or "ro.blox.com" in job_id):
+        # Private server link - launch with the link directly
+        url = job_id
+        print(f"[*] Launching with Private Server link...")
+    elif job_id:
+        # Regular job ID
+        url = f"roblox://placeId={place_id}&gameInstanceId={job_id}"
+    else:
+        # Just place ID
+        url = f"roblox://placeId={place_id}"
     
-    cmd = f'am start -a android.intent.action.VIEW -d "{url}" -n {package}/{activity}'
+    # Method 1: am start with VIEW intent
+    cmd = f'am start -a android.intent.action.VIEW -d "{url}"'
     
     try:
+        print(f"[DEBUG] Running: {cmd}")
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if r.returncode == 0:
+            print(f"[DEBUG] Success!")
+            return True
+        else:
+            print(f"[DEBUG] Failed: {r.stderr}")
+    except Exception as e:
+        print(f"[DEBUG] Error: {e}")
+    
+    # Method 2: Try with package specified
+    cmd2 = f'am start -a android.intent.action.VIEW -d "{url}" -p {package}'
+    try:
+        print(f"[DEBUG] Trying method 2: {cmd2}")
+        r = subprocess.run(cmd2, shell=True, capture_output=True, text=True)
         return r.returncode == 0
     except:
-        # Try alternative
-        cmd2 = f'am start -n {package}/{activity}'
-        try:
-            subprocess.run(cmd2, shell=True)
-            return True
-        except:
-            return False
+        pass
+    
+    # Method 3: Just launch the app
+    cmd3 = f'am start -n {package}/{activity}'
+    try:
+        print(f"[DEBUG] Trying method 3: {cmd3}")
+        subprocess.run(cmd3, shell=True)
+        return True
+    except:
+        return False
 
 def stop_app(package):
     try:
