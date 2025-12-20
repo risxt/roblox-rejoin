@@ -194,28 +194,76 @@ def force_stop(package):
 def is_running(package):
     """Check if a Roblox package is running - improved for floating windows"""
     try:
-        # Method 1: pidof
-        result = subprocess.run(f"pidof {package}", shell=True, capture_output=True, text=True)
+        # Method 1: pidof (most reliable for Android)
+        result = subprocess.run(
+            f"pidof {package}",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
         if result.returncode == 0 and result.stdout.strip():
             return True
         
-        # Method 2: dumpsys window
+        # Method 2: Check /proc for process
         result = subprocess.run(
-            f"dumpsys window windows | grep -i {package}",
-            shell=True, capture_output=True, text=True
+            f"ls /proc | xargs -I{{}} cat /proc/{{}}/cmdline 2>/dev/null | grep -a {package}",
+            shell=True,
+            capture_output=True,
+            text=True
         )
         if result.stdout.strip():
             return True
         
-        # Method 3: dumpsys activity processes
+        # Method 3: dumpsys window (for floating/freeform windows)
         result = subprocess.run(
-            f"dumpsys activity processes | grep {package}",
-            shell=True, capture_output=True, text=True
+            f"dumpsys window windows | grep -i {package}",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.stdout.strip():
+            return True
+        
+        # Method 4: dumpsys activity (task stack)
+        result = subprocess.run(
+            f"dumpsys activity recents | grep {package}",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.stdout.strip():
+            # Check if it's actually running, not just in recents
+            result2 = subprocess.run(
+                f"dumpsys activity processes | grep {package}",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if result2.stdout.strip():
+                return True
+        
+        # Method 5: am stack list (check freeform stack)
+        result = subprocess.run(
+            "am stack list 2>/dev/null | grep -i freeform",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        if result.stdout and package in result.stdout:
+            return True
+        
+        # Method 6: ps with full grep (backup)
+        result = subprocess.run(
+            f"ps -A 2>/dev/null | grep {package}",
+            shell=True,
+            capture_output=True,
+            text=True
         )
         if result.stdout.strip():
             return True
         
         return False
+        
     except:
         return False
 
