@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-Debug script v3 - Fixed false positive detection
+Debug script v4 - Tests the fixed detection method
 
 Usage:
-    python debug_detect.py                    # 5 second delay, default package
+    python debug_detect.py                    # 5 second delay
     python debug_detect.py 10                 # 10 second delay
     python debug_detect.py 10 com.roblox.clienv  # Custom delay and package
 """
 import subprocess
 import sys
 import time
+import os
 
 # Parse arguments
 delay = 5
-package = "com.roblox.clienv"  # Changed default to clienv
+package = "com.roblox.clienv"
 
 if len(sys.argv) >= 2:
     if sys.argv[1].isdigit():
@@ -25,107 +26,98 @@ if len(sys.argv) >= 2:
 
 print(f"""
 ╔════════════════════════════════════════════════════╗
-║   PROCESS DETECTION DEBUG v3 (FIXED)              ║
+║   PROCESS DETECTION DEBUG v4                       ║
 ╠════════════════════════════════════════════════════╣
 ║   Package: {package:<38} ║
 ╚════════════════════════════════════════════════════╝
 """)
 
-print(f"⏳ Auto-starting in {delay} seconds...")
-print(f"   Switch to Roblox window OR close Roblox now!")
+if delay > 0:
+    print(f"⏳ Auto-starting in {delay} seconds...")
+    for i in range(delay, 0, -1):
+        print(f"\r   Starting in {i}s...  ", end="", flush=True)
+        time.sleep(1)
+    print("\r   Starting now!       ")
 print()
 
-# Countdown
-for i in range(delay, 0, -1):
-    print(f"\r   Starting in {i}s...  ", end="", flush=True)
-    time.sleep(1)
-print("\r   Starting now!       ")
-print()
-
-def test_method(name, cmd, timeout=10):
-    """Test a method and show result"""
-    print(f"{'─'*50}")
-    print(f"[{name}]")
-    print(f"  CMD: {cmd[:70]}...")
+# The actual detection function (same as in multi_rejoin.py)
+def is_running_test(package):
+    """
+    Check if a Roblox package is running
+    Uses /proc/cmdline but filters out false positives (grep, python, cat, sh)
+    """
     try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        # Get all PIDs that have the package name in cmdline
+        result = subprocess.run(
+            f"grep -l '{package}' /proc/*/cmdline 2>/dev/null",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
         
-        if "FOUND" in result.stdout or (result.returncode == 0 and result.stdout.strip()):
-            lines = result.stdout.strip().split('\n')
-            print(f"  ✅ DETECTED")
-            if result.stdout.strip() and result.stdout.strip() != "FOUND":
-                for line in lines[:3]:
-                    print(f"     → {line[:50]}")
-            return True
-        else:
-            print(f"  ❌ NOT DETECTED")
-            return False
-            
+        if not result.stdout.strip():
+            print(f"  grep found NO files containing '{package}'")
+            return False, []
+        
+        # Check each matched PID
+        pid_files = result.stdout.strip().split('\n')
+        found_processes = []
+        
+        print(f"  grep found {len(pid_files)} file(s) containing package name")
+        
+        for pid_file in pid_files:
+            try:
+                pid = pid_file.split('/')[2]
+                
+                with open(f'/proc/{pid}/cmdline', 'r') as f:
+                    cmdline = f.read()
+                
+                cmdline_str = cmdline.replace('\x00', ' ').strip()
+                
+                # Check for false positives
+                false_positives = ['grep', 'python', 'cat', 'sh', 'bash', 'awk', 'sed', 'tr']
+                is_false_positive = False
+                first_word = cmdline_str.split()[0] if cmdline_str.split() else ""
+                
+                for fp in false_positives:
+                    if first_word.startswith(fp) or first_word.endswith(f'/{fp}'):
+                        is_false_positive = True
+                        print(f"  PID {pid}: ⚠️ FALSE POSITIVE ({fp})")
+                        print(f"           cmd: {cmdline_str[:50]}...")
+                        break
+                
+                if not is_false_positive and package in cmdline_str:
+                    print(f"  PID {pid}: ✅ REAL ROBLOX PROCESS")
+                    print(f"           cmd: {cmdline_str[:50]}...")
+                    found_processes.append(pid)
+                    
+            except (FileNotFoundError, PermissionError, IndexError) as e:
+                print(f"  PID parse error: {e}")
+                continue
+        
+        return len(found_processes) > 0, found_processes
+        
     except subprocess.TimeoutExpired:
-        print(f"  ⏰ TIMEOUT")
-        return False
+        return True, ["timeout"]
     except Exception as e:
-        print(f"  ❌ Error: {e}")
-        return False
+        print(f"  Exception: {e}")
+        return True, ["error"]
 
-results = {}
+print("=== TESTING DETECTION ===\n")
+running, processes = is_running_test(package)
 
-print("\n=== TESTING DETECTION METHODS ===\n")
-
-# Method 1: /proc/*/cmdline with proper check (process starts with package name)
-results['proc_cmdline_fixed'] = test_method(
-    "Method 1: /proc cmdline (FIXED - checks process name)",
-    f"for f in /proc/*/cmdline; do "
-    f"if cat \"$f\" 2>/dev/null | tr '\\0' ' ' | grep -q '^{package}'; then "
-    f"echo FOUND; break; fi; done"
-)
-
-# Method 2: ps -A -o NAME
-results['ps_name'] = test_method(
-    "Method 2: ps -A -o NAME (exact match)",
-    f"ps -A -o NAME 2>/dev/null | grep -q '^{package}$' && echo FOUND"
-)
-
-# Method 3: dumpsys activity processes
-results['dumpsys'] = test_method(
-    "Method 3: dumpsys activity processes",
-    f"dumpsys activity processes 2>/dev/null | grep -q 'ProcessRecord.*{package}' && echo FOUND"
-)
-
-# DEBUG: Show what processes exist with 'roblox' in name
-print(f"\n{'─'*50}")
-print("[DEBUG] All 'roblox' processes (for reference):")
-try:
-    result = subprocess.run(
-        f"ps -A 2>/dev/null | grep -i roblox | head -5",
-        shell=True, capture_output=True, text=True, timeout=10
-    )
-    if result.stdout.strip():
-        for line in result.stdout.strip().split('\n'):
-            print(f"  • {line[:60]}")
-    else:
-        print("  (none found)")
-except:
-    print("  (error)")
-
-# Summary
-any_detected = any(results.values())
 print(f"""
 
 {'═'*50}
   RESULT SUMMARY
 {'═'*50}
 
-  Method 1 (/proc cmdline): {"✅ DETECTED" if results.get('proc_cmdline_fixed') else "❌ NOT DETECTED"}
-  Method 2 (ps -A):         {"✅ DETECTED" if results.get('ps_name') else "❌ NOT DETECTED"}
-  Method 3 (dumpsys):       {"✅ DETECTED" if results.get('dumpsys') else "❌ NOT DETECTED"}
+  Package: {package}
+  Running: {"✅ YES" if running else "❌ NO"}
+  Real Roblox PIDs: {processes if processes else "(none)"}
 
-  Overall: {"🟢 RUNNING" if any_detected else "🔴 CRASHED/STOPPED"}
+  Overall: {"🟢 RUNNING" if running else "🔴 CRASHED/STOPPED"}
 
 {'═'*50}
 """)
-
-if not any_detected:
-    print("  ✅ This is correct if Roblox is NOT running!")
-else:
-    print("  ✅ This is correct if Roblox IS running!")
