@@ -208,61 +208,60 @@ def is_running(package):
 
 # ============ TUI DASHBOARD ============
 def draw_dashboard(packages, accounts, log_messages):
-    """Draw the TUI dashboard"""
+    """Draw the TUI dashboard with emoji style"""
     clear_screen()
     
     # Header
-    print(f"{C.C}{C.BOLD}╔══════════════════════════════════════════════════════════════╗")
-    print(f"║          MULTI-INSTANCE ROBLOX MONITOR v1.1                  ║")
-    print(f"╠══════════════════════════════════════════════════════════════╣{C.X}")
+    print(f"\n  {C.C}{C.BOLD}🎮 ROBLOX MULTI-INSTANCE MONITOR{C.X}")
+    print(f"  {C.DIM}{'─'*40}{C.X}\n")
     
-    # Table header
-    print(f"{C.C}║  # │ {'PACKAGE':<22} │ {'USERNAME':<15} │ STATUS   ║{C.X}")
-    print(f"{C.C}╠════╪════════════════════════╪═════════════════╪══════════╣{C.X}")
-    
-    # Table rows
+    # Instance rows
     online_count = 0
     for i, pkg in enumerate(packages, 1):
         info = state.instances.get(pkg, {})
         running = info.get("running", False)
         username = accounts.get(pkg, f"Account{i}")[:15]
         
+        # Truncate package name
+        pkg_short = pkg[-18:] if len(pkg) > 18 else pkg
+        
         if running:
-            status = f"{C.G}● Online {C.X}"
+            status = f"{C.G}🟢 Online{C.X}"
             online_count += 1
         else:
-            status = f"{C.R}● Offline{C.X}"
+            status = f"{C.R}🔴 Offline{C.X}"
         
-        # Truncate package name for display
-        pkg_short = pkg[-22:] if len(pkg) > 22 else pkg
-        
-        print(f"{C.C}║{C.X} {i:2} │ {pkg_short:<22} │ {username:<15} │ {status}{C.C}║{C.X}")
+        print(f"  📦 {C.W}{pkg_short:<18}{C.X}  👤 {C.C}{username:<15}{C.X}  {status}")
     
-    print(f"{C.C}╠══════════════════════════════════════════════════════════════╣{C.X}")
+    print()
     
     # Stats bar
     ram = get_ram_info()
     uptime = format_uptime(state.start_time)
-    print(f"{C.C}║{C.X} RAM: {C.G}{ram:<8}{C.X} │ Uptime: {C.Y}{uptime}{C.X} │ Rejoins: {C.M}{state.total_rejoins:<5}{C.X} {C.C}║{C.X}")
-    print(f"{C.C}║{C.X} Status: {C.G}{online_count}/{len(packages)} Online{C.X}                                      {C.C}║{C.X}")
-    print(f"{C.C}╠══════════════════════════════════════════════════════════════╣{C.X}")
+    print(f"  💾 RAM: {C.G}{ram}{C.X}  ⏱️ {C.Y}{uptime}{C.X}  🔄 {C.M}{state.total_rejoins}{C.X} rejoins  📊 {C.G}{online_count}/{len(packages)}{C.X}")
+    
+    print(f"\n  {C.DIM}{'─'*40}{C.X}")
     
     # Log section
-    print(f"{C.C}║{C.X} {C.BOLD}MONITOR LOG:{C.X}                                                  {C.C}║{C.X}")
-    print(f"{C.C}╠══════════════════════════════════════════════════════════════╣{C.X}")
+    print(f"  {C.BOLD}📋 LOG:{C.X}")
     
     # Show last 5 log messages
     for msg in log_messages[-5:]:
-        # Truncate message to fit
-        msg_display = msg[:60] if len(msg) > 60 else msg
-        print(f"{C.C}║{C.X} {msg_display:<60} {C.C}║{C.X}")
+        # Clean up message for display
+        msg_display = msg[:50] if len(msg) > 50 else msg
+        if "CRASH" in msg or "Offline" in msg:
+            print(f"  {C.R}❌ {msg_display}{C.X}")
+        elif "Launched" in msg or "Relaunched" in msg:
+            print(f"  {C.G}✅ {msg_display}{C.X}")
+        else:
+            print(f"  📝 {msg_display}")
     
-    # Fill remaining log lines
-    for _ in range(5 - len(log_messages[-5:])):
-        print(f"{C.C}║{C.X} {'':<60} {C.C}║{C.X}")
+    # Fill remaining lines if needed
+    if len(log_messages) < 5:
+        for _ in range(5 - len(log_messages)):
+            print()
     
-    print(f"{C.C}╚══════════════════════════════════════════════════════════════╝{C.X}")
-    print(f"{C.DIM}Press Ctrl+C to stop{C.X}")
+    print(f"\n  {C.DIM}Press Ctrl+C to stop{C.X}\n")
 
 # ============ CONFIG ============
 def load_config():
