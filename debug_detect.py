@@ -1,123 +1,101 @@
 #!/usr/bin/env python3
 """
-Debug script v4 - Tests the fixed detection method
+Debug script v5 - Tests the fixed detection method
+Now searches for 'roblox' and skips /proc/self and false positives
 
 Usage:
     python debug_detect.py                    # 5 second delay
-    python debug_detect.py 10                 # 10 second delay
-    python debug_detect.py 10 com.roblox.clienv  # Custom delay and package
+    python debug_detect.py 0                  # No delay
 """
 import subprocess
 import sys
 import time
-import os
 
-# Parse arguments
-delay = 5
-package = "com.roblox.clienv"
-
-if len(sys.argv) >= 2:
-    if sys.argv[1].isdigit():
-        delay = int(sys.argv[1])
-        if len(sys.argv) >= 3:
-            package = sys.argv[2]
-    else:
-        package = sys.argv[1]
+delay = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 5
 
 print(f"""
 ╔════════════════════════════════════════════════════╗
-║   PROCESS DETECTION DEBUG v4                       ║
-╠════════════════════════════════════════════════════╣
-║   Package: {package:<38} ║
+║   PROCESS DETECTION DEBUG v5 (FINAL)              ║
 ╚════════════════════════════════════════════════════╝
 """)
 
 if delay > 0:
-    print(f"⏳ Auto-starting in {delay} seconds...")
+    print(f"⏳ Starting in {delay} seconds...")
     for i in range(delay, 0, -1):
-        print(f"\r   Starting in {i}s...  ", end="", flush=True)
+        print(f"\r   {i}s...  ", end="", flush=True)
         time.sleep(1)
-    print("\r   Starting now!       ")
-print()
+    print("\r   Go!    ")
 
-# The actual detection function (same as in multi_rejoin.py)
-def is_running_test(package):
-    """
-    Check if a Roblox package is running
-    Uses /proc/cmdline but filters out false positives (grep, python, cat, sh)
-    """
+print("\n=== TESTING DETECTION ===\n")
+
+def is_running_test():
+    """Test the actual detection logic"""
     try:
-        # Get all PIDs that have the package name in cmdline
+        # Get all PIDs that have 'roblox' in cmdline
         result = subprocess.run(
-            f"grep -l '{package}' /proc/*/cmdline 2>/dev/null",
+            "grep -il 'roblox' /proc/[0-9]*/cmdline 2>/dev/null",
             shell=True,
             capture_output=True,
             text=True,
             timeout=10
         )
         
+        print(f"[1] grep output: {result.stdout.strip() or '(empty)'}")
+        
         if not result.stdout.strip():
-            print(f"  grep found NO files containing '{package}'")
-            return False, []
+            print("    → No files found containing 'roblox'")
+            return False
         
-        # Check each matched PID
         pid_files = result.stdout.strip().split('\n')
-        found_processes = []
-        
-        print(f"  grep found {len(pid_files)} file(s) containing package name")
+        print(f"    → Found {len(pid_files)} file(s)")
         
         for pid_file in pid_files:
             try:
+                # Skip /proc/self and /proc/thread-self
+                if '/proc/self/' in pid_file or '/proc/thread-self/' in pid_file:
+                    print(f"\n[SKIP] {pid_file} (symlink to current process)")
+                    continue
+                
                 pid = pid_file.split('/')[2]
                 
                 with open(f'/proc/{pid}/cmdline', 'r') as f:
                     cmdline = f.read()
                 
-                cmdline_str = cmdline.replace('\x00', ' ').strip()
+                cmdline_str = cmdline.replace('\x00', ' ').strip().lower()
+                
+                print(f"\n[CHECK] PID {pid}")
+                print(f"        cmdline: {cmdline_str[:50]}...")
                 
                 # Check for false positives
                 false_positives = ['grep', 'python', 'cat', 'sh', 'bash', 'awk', 'sed', 'tr']
                 is_false_positive = False
-                first_word = cmdline_str.split()[0] if cmdline_str.split() else ""
                 
+                first_word = cmdline_str.split()[0] if cmdline_str.split() else ""
                 for fp in false_positives:
-                    if first_word.startswith(fp) or first_word.endswith(f'/{fp}'):
+                    if fp in first_word:
                         is_false_positive = True
-                        print(f"  PID {pid}: ⚠️ FALSE POSITIVE ({fp})")
-                        print(f"           cmd: {cmdline_str[:50]}...")
+                        print(f"        ⚠️ FALSE POSITIVE: {fp} in command")
                         break
                 
-                if not is_false_positive and package in cmdline_str:
-                    print(f"  PID {pid}: ✅ REAL ROBLOX PROCESS")
-                    print(f"           cmd: {cmdline_str[:50]}...")
-                    found_processes.append(pid)
+                if not is_false_positive and 'roblox' in cmdline_str:
+                    print(f"        ✅ REAL ROBLOX PROCESS!")
+                    return True
                     
-            except (FileNotFoundError, PermissionError, IndexError) as e:
-                print(f"  PID parse error: {e}")
+            except (FileNotFoundError, PermissionError, IndexError, ValueError) as e:
+                print(f"        ⚠️ Error: {e}")
                 continue
         
-        return len(found_processes) > 0, found_processes
+        return False
         
-    except subprocess.TimeoutExpired:
-        return True, ["timeout"]
     except Exception as e:
-        print(f"  Exception: {e}")
-        return True, ["error"]
+        print(f"Exception: {e}")
+        return True
 
-print("=== TESTING DETECTION ===\n")
-running, processes = is_running_test(package)
+running = is_running_test()
 
 print(f"""
 
 {'═'*50}
-  RESULT SUMMARY
-{'═'*50}
-
-  Package: {package}
-  Running: {"✅ YES" if running else "❌ NO"}
-  Real Roblox PIDs: {processes if processes else "(none)"}
-
-  Overall: {"🟢 RUNNING" if running else "🔴 CRASHED/STOPPED"}
-
+  RESULT: {"🟢 RUNNING" if running else "🔴 CRASHED/STOPPED"}
 {'═'*50}
 """)
