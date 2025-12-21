@@ -249,54 +249,59 @@ def force_stop(package):
 def is_running(package):
     """
     Check if a Roblox package is running
-    IMPORTANT: Must exclude false positives from grep/python/cat processes
+    Uses /proc/cmdline but filters out false positives (grep, python, cat, sh)
     """
     try:
-        # Method 1: Check /proc/*/cmdline but EXCLUDE grep/python/cat processes
-        # We look for the package name as the ACTUAL process, not as an argument
-        result1 = subprocess.run(
-            f"for f in /proc/*/cmdline; do "
-            f"if cat \"$f\" 2>/dev/null | tr '\\0' ' ' | grep -q '^{package}'; then "
-            f"echo FOUND; break; fi; done",
+        # Get all PIDs that have the package name in cmdline
+        result = subprocess.run(
+            f"grep -l '{package}' /proc/*/cmdline 2>/dev/null",
             shell=True,
             capture_output=True,
             text=True,
             timeout=10
         )
-        if "FOUND" in result1.stdout:
-            return True
         
-        # Method 2: Use 'ps' and check if package is the actual process name (not argument)
-        result2 = subprocess.run(
-            f"ps -A -o NAME 2>/dev/null | grep -q '^{package}$' && echo FOUND",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if "FOUND" in result2.stdout:
-            return True
+        if not result.stdout.strip():
+            return False
         
-        # Method 3: dumpsys activity - check if app is in running processes
-        result3 = subprocess.run(
-            f"dumpsys activity processes 2>/dev/null | grep -q 'ProcessRecord.*{package}' && echo FOUND",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if "FOUND" in result3.stdout:
-            return True
+        # Check each matched PID to see if it's a real Roblox process
+        # and not a false positive (grep, python, cat, sh, bash)
+        pid_files = result.stdout.strip().split('\n')
         
-        # All methods say not running = crashed
+        for pid_file in pid_files:
+            try:
+                # Extract PID from path like /proc/12345/cmdline
+                pid = pid_file.split('/')[2]
+                
+                # Read the actual cmdline content
+                with open(f'/proc/{pid}/cmdline', 'r') as f:
+                    cmdline = f.read()
+                
+                # Convert null bytes to spaces
+                cmdline_str = cmdline.replace('\x00', ' ').strip()
+                
+                # Skip if this is a false positive (scripts/tools)
+                false_positives = ['grep', 'python', 'cat', 'sh', 'bash', 'awk', 'sed', 'tr']
+                is_false_positive = False
+                
+                for fp in false_positives:
+                    if cmdline_str.startswith(fp) or f'/{fp}' in cmdline_str.split()[0] if cmdline_str.split() else False:
+                        is_false_positive = True
+                        break
+                
+                # If it's not a false positive and contains package name, it's running!
+                if not is_false_positive and package in cmdline_str:
+                    return True
+                    
+            except (FileNotFoundError, PermissionError, IndexError):
+                continue
+        
         return False
         
     except subprocess.TimeoutExpired:
-        # If command times out, assume still running (safer)
-        return True
+        return True  # Assume running on timeout
     except Exception as e:
-        # On error, assume running to avoid false positives
-        return True
+        return True  # Assume running on error
 
 # ============ TUI DASHBOARD ============
 def draw_dashboard(packages, accounts, log_messages):
