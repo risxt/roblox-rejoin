@@ -192,67 +192,16 @@ def force_stop(package):
 
 # ============ MONITOR ============
 def is_running(package):
-    """Check if a Roblox package is running"""
+    """Check if a Roblox package is running using /proc/*/cmdline (only method that works on cloud phone)"""
     try:
-        # Method 1: pgrep -f (works best on Termux)
+        # This is the ONLY method that works on Redfinger cloud phone
         result = subprocess.run(
-            ["pgrep", "-f", package],
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return True
-        
-        # Method 2: ps aux grep
-        result = subprocess.run(
-            f"ps aux 2>/dev/null | grep -v grep | grep {package}",
+            f"cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q {package} && echo FOUND",
             shell=True,
             capture_output=True,
             text=True
         )
-        if result.stdout.strip():
-            return True
-        
-        # Method 3: ps -e grep
-        result = subprocess.run(
-            f"ps -e 2>/dev/null | grep {package}",
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        if result.stdout.strip():
-            return True
-        
-        # Method 4: pidof
-        result = subprocess.run(
-            f"pidof -s {package}",
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return True
-        
-        # Method 5: Check /data/data folder (app installed = might be running)
-        # This is less reliable but a backup
-        result = subprocess.run(
-            f"ls /data/data/{package} 2>/dev/null",
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            # App exists, now check if process is in /proc
-            result2 = subprocess.run(
-                f"cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q {package} && echo FOUND",
-                shell=True,
-                capture_output=True,
-                text=True
-            )
-            if "FOUND" in result2.stdout:
-                return True
-        
-        return False
+        return "FOUND" in result.stdout
         
     except Exception as e:
         return False
