@@ -1,57 +1,139 @@
 #!/usr/bin/env python3
 """
-Debug script to test which process detection method works on your device
-Run this while Roblox is running in floating window
+Debug script to test which process detection method works on Redfinger
+Run this while Roblox is RUNNING in floating window, then run again after CLOSING it
+
+Usage:
+    python debug_detect.py              # Test with default package
+    python debug_detect.py com.roblox.clien1  # Test specific package
 """
 import subprocess
+import sys
 
-# Change this to your actual package name
-PACKAGE = "com.roblox.clienv"
+# Default package - change this or pass as argument
+PACKAGE = sys.argv[1] if len(sys.argv) > 1 else "com.roblox.clien1"
 
-def test_method(name, cmd, shell=True):
-    print(f"\n[TEST] {name}")
-    print(f"  CMD: {cmd}")
+def test_method(name, cmd):
+    """Test a detection method and return result"""
+    print(f"\n{'─'*50}")
+    print(f"[TEST] {name}")
+    print(f"  CMD: {cmd[:80]}...")
     try:
-        if shell:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        else:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
         
-        print(f"  Return code: {result.returncode}")
-        print(f"  Stdout: {result.stdout[:200] if result.stdout else '(empty)'}")
-        print(f"  Stderr: {result.stderr[:100] if result.stderr else '(empty)'}")
+        stdout_preview = result.stdout[:150].replace('\n', ' ') if result.stdout else '(empty)'
+        stderr_preview = result.stderr[:80].replace('\n', ' ') if result.stderr else '(empty)'
         
-        if result.returncode == 0 and result.stdout.strip():
+        print(f"  Return: {result.returncode}")
+        print(f"  Stdout: {stdout_preview}")
+        if result.stderr:
+            print(f"  Stderr: {stderr_preview}")
+        
+        # Check if process was found
+        detected = False
+        if "FOUND" in result.stdout or "echo FOUND" not in cmd:
+            if result.returncode == 0 and result.stdout.strip():
+                detected = True
+        
+        if detected:
             print(f"  ✅ DETECTED!")
             return True
         else:
             print(f"  ❌ Not detected")
             return False
+            
+    except subprocess.TimeoutExpired:
+        print(f"  ⏰ TIMEOUT!")
+        return False
     except Exception as e:
         print(f"  ❌ Error: {e}")
         return False
 
-print(f"Testing package: {PACKAGE}")
-print("=" * 50)
+print(f"""
+╔════════════════════════════════════════════════════╗
+║   PROCESS DETECTION DEBUG TOOL                     ║
+╠════════════════════════════════════════════════════╣
+║   Testing package: {PACKAGE:<30} ║
+╚════════════════════════════════════════════════════╝
+""")
+
+print("Instructions:")
+print("  1. Run this while Roblox is RUNNING")
+print("  2. Note which methods show ✅")
+print("  3. CLOSE Roblox manually")
+print("  4. Run this AGAIN")
+print("  5. Methods that showed ✅ before and ❌ now = WORKING")
+print()
+input("Press Enter to start testing... ")
 
 # Test all methods
 results = []
 
-results.append(("pgrep -f", test_method("pgrep -f", f"pgrep -f {PACKAGE}")))
-results.append(("pgrep array", test_method("pgrep (array)", ["pgrep", "-f", PACKAGE], shell=False)))
-results.append(("pidof", test_method("pidof", f"pidof {PACKAGE}")))
-results.append(("pidof -s", test_method("pidof -s", f"pidof -s {PACKAGE}")))
-results.append(("ps -A grep", test_method("ps -A | grep", f"ps -A | grep {PACKAGE}")))
-results.append(("ps -e grep", test_method("ps -e | grep", f"ps -e | grep {PACKAGE}")))
-results.append(("ps aux grep", test_method("ps aux | grep", f"ps aux 2>/dev/null | grep -v grep | grep {PACKAGE}")))
-results.append(("dumpsys window", test_method("dumpsys window", f"dumpsys window windows | grep -i {PACKAGE}")))
-results.append(("dumpsys activity", test_method("dumpsys activity", f"dumpsys activity activities | grep {PACKAGE}")))
-results.append(("dumpsys processes", test_method("dumpsys processes", f"dumpsys activity processes | grep {PACKAGE}")))
-results.append(("proc cmdline", test_method("/proc/*/cmdline", f"cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep {PACKAGE}")))
-results.append(("am stack", test_method("am stack list", f"am stack list 2>/dev/null")))
+# Method 1: dumpsys activity processes
+results.append(("dumpsys activity processes", 
+    test_method("dumpsys activity processes", 
+    f"dumpsys activity processes 2>/dev/null | grep -q '{PACKAGE}' && echo FOUND")))
 
-print("\n" + "=" * 50)
-print("SUMMARY - Methods that work:")
+# Method 2: dumpsys window windows  
+results.append(("dumpsys window windows",
+    test_method("dumpsys window windows",
+    f"dumpsys window windows 2>/dev/null | grep -q '{PACKAGE}' && echo FOUND")))
+
+# Method 3: /proc/*/cmdline
+results.append(("/proc/*/cmdline",
+    test_method("/proc/*/cmdline", 
+    f"cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q '{PACKAGE}' && echo FOUND")))
+
+# Method 4: pidof
+results.append(("pidof",
+    test_method("pidof",
+    f"pidof {PACKAGE} 2>/dev/null")))
+
+# Method 5: ps -A | grep
+results.append(("ps -A | grep",
+    test_method("ps -A | grep",
+    f"ps -A 2>/dev/null | grep -v grep | grep -q '{PACKAGE}' && echo FOUND")))
+
+# Method 6: pgrep -f
+results.append(("pgrep -f",
+    test_method("pgrep -f",
+    f"pgrep -f {PACKAGE} 2>/dev/null")))
+
+# Method 7: dumpsys activity activities
+results.append(("dumpsys activity activities",
+    test_method("dumpsys activity activities",
+    f"dumpsys activity activities 2>/dev/null | grep -q '{PACKAGE}' && echo FOUND")))
+
+# Method 8: Check running services
+results.append(("dumpsys activity services",
+    test_method("dumpsys activity services",
+    f"dumpsys activity services 2>/dev/null | grep -q '{PACKAGE}' && echo FOUND")))
+
+# Summary
+print(f"""
+
+{'═'*50}
+  SUMMARY
+{'═'*50}
+""")
+
+working = []
+not_working = []
+
 for name, worked in results:
-    status = "✅" if worked else "❌"
-    print(f"  {status} {name}")
+    if worked:
+        working.append(name)
+        print(f"  ✅ {name}")
+    else:
+        not_working.append(name)
+        print(f"  ❌ {name}")
+
+print(f"""
+{'─'*50}
+  Working methods: {len(working)}/{len(results)}
+  
+  💡 TIP: Run this again AFTER closing Roblox.
+         The methods that change from ✅ to ❌ are 
+         the ones that WORK for crash detection!
+{'─'*50}
+""")
