@@ -247,19 +247,75 @@ def force_stop(package):
 
 # ============ MONITOR ============
 def is_running(package):
-    """Check if a Roblox package is running using /proc/*/cmdline (only method that works on cloud phone)"""
+    """
+    Check if a Roblox package is running
+    Tries multiple detection methods for reliability on cloud phones
+    """
     try:
-        # This is the ONLY method that works on Redfinger cloud phone
-        result = subprocess.run(
-            f"cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q {package} && echo FOUND",
+        # Method 1: dumpsys activity - most reliable for running apps
+        result1 = subprocess.run(
+            f"dumpsys activity processes 2>/dev/null | grep -q '{package}' && echo FOUND",
             shell=True,
             capture_output=True,
-            text=True
+            text=True,
+            timeout=5
         )
-        return "FOUND" in result.stdout
+        if "FOUND" in result1.stdout:
+            return True
         
-    except Exception as e:
+        # Method 2: dumpsys window - check if app has visible window
+        result2 = subprocess.run(
+            f"dumpsys window windows 2>/dev/null | grep -q '{package}' && echo FOUND",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if "FOUND" in result2.stdout:
+            return True
+            
+        # Method 3: /proc/*/cmdline - check process cmdline
+        result3 = subprocess.run(
+            f"cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q '{package}' && echo FOUND",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if "FOUND" in result3.stdout:
+            return True
+        
+        # Method 4: pidof - direct PID lookup
+        result4 = subprocess.run(
+            f"pidof {package} 2>/dev/null",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result4.returncode == 0 and result4.stdout.strip():
+            return True
+        
+        # Method 5: ps | grep - standard process check
+        result5 = subprocess.run(
+            f"ps -A 2>/dev/null | grep -v grep | grep -q '{package}' && echo FOUND",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if "FOUND" in result5.stdout:
+            return True
+        
+        # None of the methods found the process
         return False
+        
+    except subprocess.TimeoutExpired:
+        # If command times out, assume still running (safer)
+        return True
+    except Exception as e:
+        # On error, assume running to avoid false positives
+        return True
 
 # ============ TUI DASHBOARD ============
 def draw_dashboard(packages, accounts, log_messages):
