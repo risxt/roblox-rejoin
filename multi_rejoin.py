@@ -150,9 +150,24 @@ def detect_packages(prefix="com.roblox.clien"):
 
 # ============ URL PARSING ============
 def parse_private_server_url(url):
-    """Parse Roblox private server URL"""
+    """
+    Parse Roblox private server URL
+    Supports two formats:
+    1. ?privateServerLinkCode= (for emulators like LD, MuMu, Redfinger)
+    2. share?code= (for web/Bloxstrap - needs conversion)
+    """
     try:
         parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        
+        # Check for share?code= format first
+        if 'code' in params and '/share' in parsed.path:
+            # This is share?code= format - extract the code
+            share_code = params.get('code', [''])[0]
+            # For share links, we can't easily get place_id, return special marker
+            return None, share_code, 'share'
+        
+        # Standard privateServerLinkCode format
         path_parts = parsed.path.split('/')
         place_id = None
         for part in path_parts:
@@ -160,17 +175,20 @@ def parse_private_server_url(url):
                 place_id = part
                 break
         
-        params = parse_qs(parsed.query)
         link_code = params.get('privateServerLinkCode', [''])[0]
         
-        return place_id, link_code
+        return place_id, link_code, 'private'
     except:
-        return None, None
+        return None, None, None
 
-def build_deep_link(place_id, link_code):
-    """Build Roblox deep link URL - uses web URL format for best compatibility"""
+def build_deep_link(place_id, link_code, original_url=None):
+    """Build Roblox deep link URL for emulator launching"""
+    if original_url:
+        # For emulators, the original URL with privateServerLinkCode works best
+        return original_url
+    
     if link_code:
-        # Use the full web URL with privateServerLinkCode - more reliable on Android
+        # Fallback: construct URL
         return f"https://www.roblox.com/games/start?placeId={place_id}&privateServerLinkCode={link_code}"
     else:
         return f"https://www.roblox.com/games/start?placeId={place_id}"
@@ -185,21 +203,39 @@ def build_deep_link_protocol(place_id, link_code):
 
 # ============ LAUNCHER ============
 def launch_game(package, deep_link, activity=".startup.ActivitySplash"):
-    """Launch Roblox with deep link - tries multiple methods for reliability"""
+    """
+    Launch Roblox with deep link - tries multiple methods for reliability
+    For emulators (Redfinger, LD, MuMu), we try different intent methods
+    """
     try:
-        # Method 1: Direct VIEW intent with URL
+        # Method 1: Direct VIEW intent with package specified
+        # This tells Android to open the URL with the specific Roblox package
         cmd = f'am start -a android.intent.action.VIEW -d "{deep_link}" -p {package}'
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
-        if result.returncode == 0:
+        if result.returncode == 0 and "Error" not in result.stderr:
             return True
             
-        # Method 2: Try with explicit component
-        cmd2 = f'am start -n {package}/{package}.startup.ActivitySplash -a android.intent.action.VIEW -d "{deep_link}"'
+        # Method 2: VIEW intent without package (let system choose default handler)
+        cmd2 = f'am start -a android.intent.action.VIEW -d "{deep_link}"'
         result2 = subprocess.run(cmd2, shell=True, capture_output=True, text=True)
         
-        return result2.returncode == 0
-    except:
+        if result2.returncode == 0 and "Error" not in result2.stderr:
+            return True
+        
+        # Method 3: Launch app first, then send intent
+        # Sometimes the app needs to be running first
+        launch_cmd = f'am start -n {package}/{package}.startup.ActivitySplash'
+        subprocess.run(launch_cmd, shell=True, capture_output=True, text=True)
+        time.sleep(2)
+        
+        # Now send the deep link
+        cmd3 = f'am start -a android.intent.action.VIEW -d "{deep_link}" -p {package}'
+        result3 = subprocess.run(cmd3, shell=True, capture_output=True, text=True)
+        
+        return result3.returncode == 0
+    except Exception as e:
+        print(f"Launch error: {e}")
         return False
 
 def force_stop(package):
@@ -427,12 +463,28 @@ def main():
         print(f"{C.R}[!] Private server URL is required!{C.X}")
         return
     
-    place_id, link_code = parse_private_server_url(config['private_server_url'])
-    if not place_id:
-        print(f"{C.R}[!] Could not parse place ID!{C.X}")
+    original_url = config['private_server_url']
+    place_id, link_code, url_type = parse_private_server_url(original_url)
+    
+    # Handle share?code= format - warn user to convert
+    if url_type == 'share':
+        print(f"\n{C.Y}[!] WARNING: You're using share?code= format!{C.X}")
+        print(f"    This format doesn't work well on emulators.")
+        print(f"    Please open the link in browser and copy the redirected URL")
+        print(f"    which should have ?privateServerLinkCode= format instead.")
+        print(f"\n    Your link: {original_url[:50]}...")
+        inp = input(f"\n{C.Y}Continue anyway? (y/n): {C.X}").strip().lower()
+        if inp != 'y':
+            return
+    
+    if not place_id and url_type != 'share':
+        print(f"{C.R}[!] Could not parse place ID from URL!{C.X}")
+        print(f"    URL: {original_url[:60]}...")
         return
     
-    deep_link = build_deep_link(place_id, link_code)
+    # For emulators, use the original URL if it has privateServerLinkCode
+    # This is more reliable than constructing a new URL
+    deep_link = build_deep_link(place_id, link_code, original_url)
     interval = config.get('check_interval', 60)
     delay = config.get('rejoin_delay', 5)
     webhook = config.get('discord_webhook', '')
