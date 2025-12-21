@@ -249,12 +249,13 @@ def force_stop(package):
 def is_running(package):
     """
     Check if a Roblox package is running
-    Uses /proc/cmdline but filters out false positives (grep, python, cat, sh)
+    Searches for 'roblox' in /proc/*/cmdline, filtering out false positives
     """
     try:
-        # Get all PIDs that have the package name in cmdline
+        # Get all PIDs that have 'roblox' in cmdline (case insensitive)
+        # We search for 'roblox' because the actual process cmdline doesn't contain full package name
         result = subprocess.run(
-            f"grep -l '{package}' /proc/*/cmdline 2>/dev/null",
+            "grep -il 'roblox' /proc/[0-9]*/cmdline 2>/dev/null",
             shell=True,
             capture_output=True,
             text=True,
@@ -264,12 +265,15 @@ def is_running(package):
         if not result.stdout.strip():
             return False
         
-        # Check each matched PID to see if it's a real Roblox process
-        # and not a false positive (grep, python, cat, sh, bash)
+        # Check each matched PID
         pid_files = result.stdout.strip().split('\n')
         
         for pid_file in pid_files:
             try:
+                # Skip /proc/self and /proc/thread-self (these are symlinks to current process)
+                if '/proc/self/' in pid_file or '/proc/thread-self/' in pid_file:
+                    continue
+                
                 # Extract PID from path like /proc/12345/cmdline
                 pid = pid_file.split('/')[2]
                 
@@ -278,22 +282,23 @@ def is_running(package):
                     cmdline = f.read()
                 
                 # Convert null bytes to spaces
-                cmdline_str = cmdline.replace('\x00', ' ').strip()
+                cmdline_str = cmdline.replace('\x00', ' ').strip().lower()
                 
-                # Skip if this is a false positive (scripts/tools)
+                # Skip if this is a false positive (our scripts/commands)
                 false_positives = ['grep', 'python', 'cat', 'sh', 'bash', 'awk', 'sed', 'tr']
                 is_false_positive = False
                 
+                first_word = cmdline_str.split()[0] if cmdline_str.split() else ""
                 for fp in false_positives:
-                    if cmdline_str.startswith(fp) or f'/{fp}' in cmdline_str.split()[0] if cmdline_str.split() else False:
+                    if fp in first_word:
                         is_false_positive = True
                         break
                 
-                # If it's not a false positive and contains package name, it's running!
-                if not is_false_positive and package in cmdline_str:
+                # If it's not a false positive and contains 'roblox', it's running!
+                if not is_false_positive and 'roblox' in cmdline_str:
                     return True
                     
-            except (FileNotFoundError, PermissionError, IndexError):
+            except (FileNotFoundError, PermissionError, IndexError, ValueError):
                 continue
         
         return False
