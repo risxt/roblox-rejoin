@@ -21,6 +21,7 @@ import requests
 import re
 import os
 import sys
+import argparse
 from datetime import datetime
 from urllib.parse import quote, urlparse, parse_qs
 
@@ -30,6 +31,7 @@ DEFAULT_CONFIG = {
     "private_server_url": "",
     "check_interval": 60,
     "rejoin_delay": 5,
+    "launch_delay": 20,  # Delay between launching each instance (seconds)
     "discord_webhook": "",
     "package_prefix": "com.roblox.clien",
     "activity_name": ".startup.ActivitySplash",
@@ -166,20 +168,37 @@ def parse_private_server_url(url):
         return None, None
 
 def build_deep_link(place_id, link_code):
-    """Build Roblox deep link URL"""
+    """Build Roblox deep link URL - uses web URL format for best compatibility"""
     if link_code:
-        launch_data = quote(f"privateServerLinkCode={link_code}")
-        return f"roblox://experiences/start?placeId={place_id}&launchData={launch_data}"
+        # Use the full web URL with privateServerLinkCode - more reliable on Android
+        return f"https://www.roblox.com/games/start?placeId={place_id}&privateServerLinkCode={link_code}"
+    else:
+        return f"https://www.roblox.com/games/start?placeId={place_id}"
+
+def build_deep_link_protocol(place_id, link_code):
+    """Build Roblox deep link using roblox:// protocol (alternative method)"""
+    if link_code:
+        # Format: roblox://placeId=X&linkCode=Y
+        return f"roblox://placeId={place_id}&linkCode={link_code}"
     else:
         return f"roblox://placeId={place_id}"
 
 # ============ LAUNCHER ============
 def launch_game(package, deep_link, activity=".startup.ActivitySplash"):
-    """Launch Roblox with deep link"""
+    """Launch Roblox with deep link - tries multiple methods for reliability"""
     try:
+        # Method 1: Direct VIEW intent with URL
         cmd = f'am start -a android.intent.action.VIEW -d "{deep_link}" -p {package}'
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        return result.returncode == 0
+        
+        if result.returncode == 0:
+            return True
+            
+        # Method 2: Try with explicit component
+        cmd2 = f'am start -n {package}/{package}.startup.ActivitySplash -a android.intent.action.VIEW -d "{deep_link}"'
+        result2 = subprocess.run(cmd2, shell=True, capture_output=True, text=True)
+        
+        return result2.returncode == 0
     except:
         return False
 
@@ -363,7 +382,17 @@ def banner():
     """)
 
 def main():
-    banner()
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Multi-Instance Roblox Auto-Rejoin')
+    parser.add_argument('--auto', action='store_true', help='Auto mode - skip all prompts (for Termux Boot)')
+    args = parser.parse_args()
+    
+    auto_mode = args.auto
+    
+    if not auto_mode:
+        banner()
+    else:
+        print(f"{C.G}[AUTO MODE] Starting...{C.X}")
     
     config = load_config()
     prefix = config.get('package_prefix', 'com.roblox.clien')
@@ -386,11 +415,12 @@ def main():
             "username": accounts.get(pkg, f"Account{packages.index(pkg)+1}")
         }
     
-    # Setup?
-    inp = input(f"\n{C.Y}Edit config/accounts? (y/n): {C.X}").strip().lower()
-    if inp == 'y':
-        config = setup_interactive(config, packages)
-        accounts = config.get('accounts', {})
+    # Setup? (skip in auto mode)
+    if not auto_mode:
+        inp = input(f"\n{C.Y}Edit config/accounts? (y/n): {C.X}").strip().lower()
+        if inp == 'y':
+            config = setup_interactive(config, packages)
+            accounts = config.get('accounts', {})
     
     # Validate URL
     if not config.get('private_server_url'):
@@ -410,26 +440,114 @@ def main():
     
     state.start_time = datetime.now()
     log_messages = []
+    launch_delay = config.get('launch_delay', 20)  # Default 20s delay between launches
     
-    # Initial launch
-    print(f"\n{C.B}[*] Launching all instances...{C.X}")
-    for pkg in packages:
-        launch_game(pkg, deep_link, activity)
-        log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] Launched {pkg[-15:]}")
-        time.sleep(2)
+    # Debug: Show the deep link being used
+    print(f"\n{C.B}[DEBUG] Deep link URL:{C.X}")
+    print(f"  {C.DIM}{deep_link}{C.X}")
+    print(f"  Place ID: {C.G}{place_id}{C.X}")
+    print(f"  Link Code: {C.G}{link_code or 'None'}{C.X}\n")
     
-    print(f"{C.G}[✓] All launched! Starting monitor in 15s...{C.X}")
-    time.sleep(15)
+    # ============ LAUNCH MENU ============
+    selected_packages = []  # Packages to launch and monitor
+    
+    if not auto_mode:
+        print(f"\n{C.C}{'='*50}")
+        print(f"           LAUNCH OPTIONS")
+        print(f"{'='*50}{C.X}\n")
+        print(f"  {C.G}[1]{C.X} Launch Single Instance (pick one)")
+        print(f"  {C.G}[2]{C.X} Launch ALL Instances (20s delay)")
+        print(f"  {C.G}[3]{C.X} Monitor Only (no launch)")
+        print()
+        
+        choice = input(f"{C.Y}Select option (1/2/3): {C.X}").strip()
+        
+        if choice == '1':
+            # Single instance selection
+            print(f"\n{C.C}{'='*50}")
+            print(f"      SELECT INSTANCE TO LAUNCH")
+            print(f"{'='*50}{C.X}\n")
+            
+            for i, pkg in enumerate(packages, 1):
+                username = accounts.get(pkg, f"Account{i}")
+                pkg_short = pkg.split('.')[-1]  # e.g. "clien1"
+                print(f"  {C.G}[{i}]{C.X} {pkg_short} - {C.C}{username}{C.X}")
+            
+            print()
+            idx_input = input(f"{C.Y}Enter number (1-{len(packages)}): {C.X}").strip()
+            
+            if idx_input.isdigit():
+                idx = int(idx_input) - 1
+                if 0 <= idx < len(packages):
+                    selected_pkg = packages[idx]
+                    selected_packages = [selected_pkg]
+                    
+                    print(f"\n{C.B}[*] Launching {accounts.get(selected_pkg, selected_pkg)}...{C.X}")
+                    launch_game(selected_pkg, deep_link, activity)
+                    log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] Launched {selected_pkg[-15:]}")
+                    print(f"{C.G}[✓] Launched! Starting monitor in 15s...{C.X}")
+                    time.sleep(15)
+                else:
+                    print(f"{C.R}[!] Invalid selection!{C.X}")
+                    return
+            else:
+                print(f"{C.R}[!] Invalid input!{C.X}")
+                return
+                
+        elif choice == '2':
+            # Launch all with delay
+            selected_packages = packages.copy()
+            print(f"\n{C.B}[*] Launching all {len(packages)} instances (delay: {launch_delay}s each)...{C.X}")
+            
+            for i, pkg in enumerate(packages):
+                username = accounts.get(pkg, f"Account{i+1}")
+                print(f"  {C.G}▶{C.X} Launching {username}...")
+                launch_game(pkg, deep_link, activity)
+                log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] Launched {pkg[-15:]}")
+                
+                if i < len(packages) - 1:  # Don't wait after last one
+                    print(f"  {C.Y}  ⏳ Waiting {launch_delay}s before next...{C.X}")
+                    # Countdown display
+                    for sec in range(launch_delay, 0, -1):
+                        print(f"\r  {C.DIM}    {sec}s remaining...{C.X}  ", end="", flush=True)
+                        time.sleep(1)
+                    print()  # New line after countdown
+            
+            print(f"\n{C.G}[✓] All instances launched! Starting monitor in 15s...{C.X}")
+            time.sleep(15)
+            
+        elif choice == '3':
+            # Monitor only
+            selected_packages = packages.copy()
+            print(f"\n{C.B}[*] Monitor mode - no launch, checking existing instances...{C.X}")
+            time.sleep(2)
+            
+        else:
+            print(f"{C.R}[!] Invalid option! Exiting...{C.X}")
+            return
+    else:
+        # Auto mode: launch all with delay
+        selected_packages = packages.copy()
+        print(f"\n{C.B}[*] AUTO MODE: Launching all instances (delay: {launch_delay}s each)...{C.X}")
+        for i, pkg in enumerate(packages):
+            launch_game(pkg, deep_link, activity)
+            log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] Launched {pkg[-15:]}")
+            if i < len(packages) - 1:
+                time.sleep(launch_delay)
+        time.sleep(15)
     
     # Webhook
     if webhook:
-        send_webhook(webhook, "🚀 Monitor Started!", f"Monitoring {len(packages)} instances", 0x00ff00)
+        send_webhook(webhook, "🚀 Monitor Started!", f"Monitoring {len(selected_packages)} instances", 0x00ff00)
+    
+    # Use selected_packages for monitoring (could be 1 or all)
+    monitor_packages = selected_packages if selected_packages else packages
     
     # Main loop with TUI
     try:
         while state.running:
             # Check each package
-            for pkg in packages:
+            for pkg in monitor_packages:
                 running = is_running(pkg)
                 state.instances[pkg]["running"] = running
                 
@@ -451,7 +569,7 @@ def main():
                     log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] Relaunched {username}")
                     time.sleep(5)
             
-            # Draw dashboard
+            # Draw dashboard (show all packages for visibility, but only monitor selected)
             draw_dashboard(packages, accounts, log_messages)
             
             # Wait for next check
@@ -470,7 +588,7 @@ def main():
         print(f"  Uptime: {uptime}")
         print(f"  Total Rejoins: {state.total_rejoins}\n")
         
-        for pkg in packages:
+        for pkg in monitor_packages:
             info = state.instances.get(pkg, {})
             username = accounts.get(pkg, pkg[-15:])
             rejoins = info.get("rejoins", 0)
