@@ -249,64 +249,53 @@ def force_stop(package):
 def is_running(package):
     """
     Check if a Roblox package is running
-    Searches for 'roblox' in /proc/*/cmdline, filtering out false positives
+    Directly iterates /proc to avoid race conditions with grep
     """
     try:
-        # Get all PIDs that have 'roblox' in cmdline (case insensitive)
-        # We search for 'roblox' because the actual process cmdline doesn't contain full package name
-        result = subprocess.run(
-            "grep -il 'roblox' /proc/[0-9]*/cmdline 2>/dev/null",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        our_pid = os.getpid()
         
-        if not result.stdout.strip():
-            return False
-        
-        # Check each matched PID
-        pid_files = result.stdout.strip().split('\n')
-        
-        for pid_file in pid_files:
+        # Directly iterate /proc entries
+        for entry in os.listdir('/proc'):
+            # Only check numeric PIDs
+            if not entry.isdigit():
+                continue
+            
+            pid = int(entry)
+            
+            # Skip our own process
+            if pid == our_pid:
+                continue
+            
+            cmdline_path = f'/proc/{pid}/cmdline'
+            
             try:
-                # Skip /proc/self and /proc/thread-self (these are symlinks to current process)
-                if '/proc/self/' in pid_file or '/proc/thread-self/' in pid_file:
-                    continue
-                
-                # Extract PID from path like /proc/12345/cmdline
-                pid = pid_file.split('/')[2]
-                
-                # Read the actual cmdline content
-                with open(f'/proc/{pid}/cmdline', 'r') as f:
+                with open(cmdline_path, 'rb') as f:
                     cmdline = f.read()
                 
-                # Convert null bytes to spaces
-                cmdline_str = cmdline.replace('\x00', ' ').strip().lower()
+                # Convert to lowercase string
+                cmdline_str = cmdline.replace(b'\x00', b' ').decode('utf-8', errors='ignore').lower().strip()
                 
-                # Skip if this is a false positive (our scripts/commands)
-                false_positives = ['grep', 'python', 'cat', 'sh', 'bash', 'awk', 'sed', 'tr']
-                is_false_positive = False
-                
-                first_word = cmdline_str.split()[0] if cmdline_str.split() else ""
-                for fp in false_positives:
-                    if fp in first_word:
-                        is_false_positive = True
-                        break
-                
-                # If it's not a false positive and contains 'roblox', it's running!
-                if not is_false_positive and 'roblox' in cmdline_str:
-                    return True
+                # Check if 'roblox' is in cmdline
+                if 'roblox' in cmdline_str:
+                    # Check for false positives (scripts/commands that have 'roblox' as argument)
+                    first_word = cmdline_str.split()[0] if cmdline_str.split() else ""
+                    false_positives = ['grep', 'python', 'cat', 'sh', 'bash', 'awk', 'sed', 'tr', 'perl']
                     
-            except (FileNotFoundError, PermissionError, IndexError, ValueError):
+                    is_fp = any(fp in first_word for fp in false_positives)
+                    
+                    if not is_fp:
+                        # Found a real Roblox process!
+                        return True
+                    
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
                 continue
         
+        # No Roblox process found
         return False
         
-    except subprocess.TimeoutExpired:
-        return True  # Assume running on timeout
     except Exception as e:
-        return True  # Assume running on error
+        # On error, assume running to avoid false positives
+        return True
 
 # ============ TUI DASHBOARD ============
 def draw_dashboard(packages, accounts, log_messages):
@@ -642,59 +631,131 @@ def main():
     # Use selected_packages for monitoring (could be 1 or all)
     monitor_packages = selected_packages if selected_packages else packages
     
-    # Main loop with TUI
+    # ============ MANUAL TRIGGER DASHBOARD ============
+    # Since auto crash detection doesn't work well on Redfinger,
+    # we use manual trigger - user types number to relaunch instance
+    
+    import select
+    import sys
+    
+    def draw_manual_dashboard(packages, accounts, log_messages):
+        """Draw dashboard with manual trigger options"""
+        clear_screen()
+        
+        # Header
+        print(f"\n  {C.C}{C.BOLD}🎮 ROBLOX MULTI-INSTANCE MONITOR{C.X}")
+        print(f"  {C.DIM}────────────────────────────────────────{C.X}\n")
+        
+        # Instance rows with numbers for relaunch
+        for i, pkg in enumerate(packages, 1):
+            username = accounts.get(pkg, f"Account{i}")[:15]
+            pkg_short = pkg.split('.')[-1]  # e.g. "clienv"
+            
+            print(f"  {C.G}[{i}]{C.X} {C.C}{username:<15}{C.X}  📦 {C.DIM}{pkg_short}{C.X}")
+        
+        print()
+        
+        # Stats bar
+        ram = get_ram_info()
+        uptime = format_uptime(state.start_time)
+        print(f"  💾 RAM: {C.G}{ram}{C.X}  ⏱️ {C.Y}{uptime}{C.X}  🔄 {C.M}{state.total_rejoins}{C.X} rejoins")
+        
+        print(f"\n  {C.DIM}────────────────────────────────────────{C.X}")
+        
+        # Log section
+        print(f"  {C.BOLD}📋 LOG:{C.X}")
+        for msg in log_messages[-5:]:
+            msg_display = msg[:50] if len(msg) > 50 else msg
+            if "RELAUNCH" in msg.upper():
+                print(f"  {C.G}✅ {msg_display}{C.X}")
+            else:
+                print(f"  📝 {msg_display}")
+        
+        # Fill remaining lines
+        if len(log_messages) < 5:
+            for _ in range(5 - len(log_messages)):
+                print()
+        
+        print(f"\n  {C.DIM}────────────────────────────────────────{C.X}")
+        print(f"  {C.Y}Type 1-{len(packages)} to RELAUNCH instance, Q to quit{C.X}")
+        print(f"  {C.DIM}(Runs in background - check when you see crash){C.X}\n")
+        print(f"  > ", end="", flush=True)
+    
+    def get_input_nonblocking(timeout=1):
+        """Non-blocking input for Android/Linux"""
+        try:
+            # Check if stdin has data
+            rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+            if rlist:
+                return sys.stdin.readline().strip()
+        except:
+            pass
+        return None
+    
+    # Main loop with manual trigger
     try:
         while state.running:
-            # Check each package
-            for pkg in monitor_packages:
-                running = is_running(pkg)
-                state.instances[pkg]["running"] = running
+            draw_manual_dashboard(packages, accounts, log_messages)
+            
+            # Wait for input with timeout (allows refresh)
+            user_input = get_input_nonblocking(5)  # 5 second timeout, then refresh
+            
+            if user_input:
+                user_input = user_input.lower().strip()
                 
-                if not running:
-                    state.instances[pkg]["rejoins"] += 1
-                    state.total_rejoins += 1
-                    username = accounts.get(pkg, pkg[-10:])
-                    
-                    log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] {C.R}CRASH:{C.X} {username}")
-                    
-                    if webhook:
-                        send_webhook(webhook, f"🔴 {username} Crashed!", "Attempting rejoin...", 0xff0000)
-                    
-                    time.sleep(delay)
-                    force_stop(pkg)
-                    time.sleep(1)
-                    launch_game(pkg, deep_link, activity)
-                    
-                    log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] Relaunched {username}")
-                    time.sleep(5)
-            
-            # Draw dashboard (show all packages for visibility, but only monitor selected)
-            draw_dashboard(packages, accounts, log_messages)
-            
-            # Wait for next check
-            for i in range(interval):
-                time.sleep(1)
-                # Could add countdown here if needed
+                if user_input == 'q':
+                    state.running = False
+                    break
+                
+                elif user_input.isdigit():
+                    idx = int(user_input) - 1
+                    if 0 <= idx < len(packages):
+                        pkg = packages[idx]
+                        username = accounts.get(pkg, pkg[-15:])
+                        
+                        print(f"\n  {C.B}⏳ Relaunching {username}...{C.X}")
+                        
+                        # Force stop first (might not work but try)
+                        force_stop(pkg)
+                        time.sleep(1)
+                        
+                        # Relaunch
+                        launch_game(pkg, deep_link, activity)
+                        state.total_rejoins += 1
+                        
+                        log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] Relaunched {username}")
+                        
+                        if webhook:
+                            send_webhook(webhook, f"🔄 {username} Relaunched", "Manual trigger", 0x00ff00)
+                        
+                        print(f"  {C.G}✅ Done! Continuing in 3s...{C.X}")
+                        time.sleep(3)
+                    else:
+                        print(f"\n  {C.R}Invalid number!{C.X}")
+                        time.sleep(2)
+                else:
+                    print(f"\n  {C.R}Type a number (1-{len(packages)}) or Q{C.X}")
+                    time.sleep(2)
                 
     except KeyboardInterrupt:
         state.running = False
-        clear_screen()
-        uptime = format_uptime(state.start_time)
-        
-        print(f"\n{C.Y}{'='*50}")
-        print(f"           MONITOR STOPPED")
-        print(f"{'='*50}{C.X}")
-        print(f"  Uptime: {uptime}")
-        print(f"  Total Rejoins: {state.total_rejoins}\n")
-        
-        for pkg in monitor_packages:
-            info = state.instances.get(pkg, {})
-            username = accounts.get(pkg, pkg[-15:])
-            rejoins = info.get("rejoins", 0)
-            print(f"  • {username}: {rejoins} rejoins")
-        
-        if webhook:
-            send_webhook(webhook, "🛑 Monitor Stopped", f"Uptime: {uptime}\nRejoins: {state.total_rejoins}", 0xffaa00)
+    
+    # Exit summary
+    clear_screen()
+    uptime = format_uptime(state.start_time)
+    
+    print(f"\n{C.Y}{'='*50}")
+    print(f"           MONITOR STOPPED")
+    print(f"{'='*50}{C.X}")
+    print(f"  Uptime: {uptime}")
+    print(f"  Total Relaunches: {state.total_rejoins}\n")
+    
+    for pkg in monitor_packages:
+        username = accounts.get(pkg, pkg[-15:])
+        print(f"  • {username}")
+    
+    if webhook:
+        send_webhook(webhook, "🛑 Monitor Stopped", f"Uptime: {uptime}\nRelaunches: {state.total_rejoins}", 0xffaa00)
 
 if __name__ == "__main__":
     main()
