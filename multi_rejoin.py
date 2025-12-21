@@ -249,23 +249,26 @@ def force_stop(package):
 def is_running(package):
     """
     Check if a Roblox package is running
-    Tries multiple detection methods for reliability on cloud phones
+    IMPORTANT: Must exclude false positives from grep/python/cat processes
     """
     try:
-        # Method 1: dumpsys activity - most reliable for running apps
+        # Method 1: Check /proc/*/cmdline but EXCLUDE grep/python/cat processes
+        # We look for the package name as the ACTUAL process, not as an argument
         result1 = subprocess.run(
-            f"dumpsys activity processes 2>/dev/null | grep -q '{package}' && echo FOUND",
+            f"for f in /proc/*/cmdline; do "
+            f"if cat \"$f\" 2>/dev/null | tr '\\0' ' ' | grep -q '^{package}'; then "
+            f"echo FOUND; break; fi; done",
             shell=True,
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=10
         )
         if "FOUND" in result1.stdout:
             return True
         
-        # Method 2: dumpsys window - check if app has visible window
+        # Method 2: Use 'ps' and check if package is the actual process name (not argument)
         result2 = subprocess.run(
-            f"dumpsys window windows 2>/dev/null | grep -q '{package}' && echo FOUND",
+            f"ps -A -o NAME 2>/dev/null | grep -q '^{package}$' && echo FOUND",
             shell=True,
             capture_output=True,
             text=True,
@@ -273,10 +276,10 @@ def is_running(package):
         )
         if "FOUND" in result2.stdout:
             return True
-            
-        # Method 3: /proc/*/cmdline - check process cmdline
+        
+        # Method 3: dumpsys activity - check if app is in running processes
         result3 = subprocess.run(
-            f"cat /proc/*/cmdline 2>/dev/null | tr '\\0' '\\n' | grep -q '{package}' && echo FOUND",
+            f"dumpsys activity processes 2>/dev/null | grep -q 'ProcessRecord.*{package}' && echo FOUND",
             shell=True,
             capture_output=True,
             text=True,
@@ -285,29 +288,7 @@ def is_running(package):
         if "FOUND" in result3.stdout:
             return True
         
-        # Method 4: pidof - direct PID lookup
-        result4 = subprocess.run(
-            f"pidof {package} 2>/dev/null",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result4.returncode == 0 and result4.stdout.strip():
-            return True
-        
-        # Method 5: ps | grep - standard process check
-        result5 = subprocess.run(
-            f"ps -A 2>/dev/null | grep -v grep | grep -q '{package}' && echo FOUND",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if "FOUND" in result5.stdout:
-            return True
-        
-        # None of the methods found the process
+        # All methods say not running = crashed
         return False
         
     except subprocess.TimeoutExpired:
