@@ -239,27 +239,37 @@ def main():
     run_cmd("device_config put activity_manager max_phantom_processes 2147483647")
     log("Optimizations applied", "OK")
     
-    # Load config
+    # Load config - NO PROMPTS, just load!
+    if not os.path.exists("config.json"):
+        print(f"\n{C.R}[!] config.json not found!{C.X}")
+        print(f"{C.Y}    Create config.json with this format:{C.X}")
+        print(f'''
+{{
+  "place_id": "YOUR_PLACE_ID",
+  "link_code": "YOUR_PRIVATE_SERVER_CODE",
+  "packages": ["com.roblox.client1", "com.roblox.client2"],
+  "check_interval": 5,
+  "launch_delay": 30
+}}
+        ''')
+        print(f"{C.Y}    Use: nano config.json{C.X}")
+        sys.exit(1)
+    
     config = load_config()
     
-    # Show current config
-    if config["place_id"]:
-        print(f"\n{C.B}[*] Current Config:{C.X}")
-        print(f"    PlaceID:  {config['place_id']}")
-        print(f"    Packages: {', '.join(config['packages'])}")
-        print(f"    Interval: {config['check_interval']}s")
-        
-        inp = input(f"\n{C.Y}Use this config? (y/n): {C.X}").strip().lower()
-        if inp != 'y':
-            config = setup(config)
-            if not config:
-                sys.exit(1)
-    else:
-        config = setup(config)
-        if not config:
-            sys.exit(1)
+    # Validate config
+    if not config.get("place_id") or not config.get("link_code"):
+        print(f"{C.R}[!] Invalid config! Edit config.json with nano{C.X}")
+        sys.exit(1)
     
-    # Start monitor
+    # Show config
+    print(f"\n{C.G}[✓] Config loaded:{C.X}")
+    print(f"    PlaceID:  {config['place_id']}")
+    print(f"    Packages: {', '.join(config['packages'])}")
+    print(f"    Interval: {config['check_interval']}s")
+    print(f"    Delay:    {config['launch_delay']}s")
+    
+    # Start monitor directly - NO PROMPTS!
     try:
         monitor(config)
     except KeyboardInterrupt:
