@@ -116,42 +116,39 @@ def is_running(package):
 
 # ============ LAUNCHER ============
 def launch_game(package, place_id, link_code):
-    """Launch Roblox to private server - MATCHING REFERENCE SCRIPT"""
+    """Launch Roblox to private server - COMPONENT LAUNCH FIRST (no chooser)"""
     
-    # Try different URL formats
-    urls = [
-        f"roblox://placeId={place_id}&linkCode={link_code}",
-        f"roblox://navigation/game?placeId={place_id}&launchData={link_code}",
-        f"roblox://placeId={place_id}",
-    ]
+    # URL for deep link
+    url = f"roblox://placeId={place_id}&linkCode={link_code}"
     
-    for url in urls:
-        # Method 1: Direct am start (like reference script)
-        cmd = f'am start -a android.intent.action.VIEW -d "{url}"'
-        try:
-            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-            if r.returncode == 0:
-                log(f"✅ Launched {package}", "OK")
-                return True
-        except:
-            pass
-        
-        # Method 2: With package specified
-        cmd = f'am start -a android.intent.action.VIEW -d "{url}" -p {package}'
-        try:
-            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-            if r.returncode == 0:
-                log(f"✅ Launched {package}", "OK")
-                return True
-        except:
-            pass
+    # METHOD 1: Component launch (MOST SPECIFIC - NO CHOOSER!)
+    # This directly launches the specific package's activity
+    component = f"{package}/com.roblox.client.startup.ActivitySplash"
+    cmd = f'am start -n {component} -a android.intent.action.VIEW -d "{url}"'
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and "Error" not in r.stderr:
+            log(f"✅ Launched {package}", "OK")
+            return True
+    except:
+        pass
     
-    # Method 3: Just start the package activity
-    cmd = f'am start -n {package}/com.roblox.client.startup.ActivitySplash'
+    # METHOD 2: Package launch with -p flag
+    cmd = f'am start -a android.intent.action.VIEW -d "{url}" -p {package}'
     try:
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
-            log(f"✅ Launched {package} (activity)", "OK")
+            log(f"✅ Launched {package} (pkg)", "OK")
+            return True
+    except:
+        pass
+    
+    # METHOD 3: Just start activity (no URL)
+    cmd = f'am start -n {component}'
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            log(f"✅ Launched {package} (activity only)", "OK")
             return True
     except:
         pass
