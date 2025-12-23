@@ -116,28 +116,48 @@ def is_running(package):
 
 # ============ LAUNCHER ============
 def launch_game(package, place_id, link_code):
-    """Launch Roblox to private server"""
-    url = f"roblox://navigation/game?placeId={place_id}&launchData={link_code}"
+    """Launch Roblox to private server - MATCHING REFERENCE SCRIPT"""
     
-    # Try direct activity launch first (bypass chooser)
-    activity = f"{package}/com.roblox.client.startup.ActivitySplash"
-    cmd = f'am start -n {activity} -a android.intent.action.VIEW -d "{url}"'
+    # Try different URL formats
+    urls = [
+        f"roblox://placeId={place_id}&linkCode={link_code}",
+        f"roblox://navigation/game?placeId={place_id}&launchData={link_code}",
+        f"roblox://placeId={place_id}",
+    ]
     
-    log(f"Launching {package}...")
-    ok, out = run_cmd(cmd)
-    
-    # Fallback to package-based launch
-    if not ok or "Error" in out:
-        log("Trying fallback launch...", "WARN")
+    for url in urls:
+        # Method 1: Direct am start (like reference script)
+        cmd = f'am start -a android.intent.action.VIEW -d "{url}"'
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                log(f"✅ Launched {package}", "OK")
+                return True
+        except:
+            pass
+        
+        # Method 2: With package specified
         cmd = f'am start -a android.intent.action.VIEW -d "{url}" -p {package}'
-        ok, out = run_cmd(cmd)
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                log(f"✅ Launched {package}", "OK")
+                return True
+        except:
+            pass
     
-    if ok and "Error" not in out:
-        log(f"✅ Launched {package}", "OK")
-        return True
-    else:
-        log(f"❌ Failed to launch {package}", "ERR")
-        return False
+    # Method 3: Just start the package activity
+    cmd = f'am start -n {package}/com.roblox.client.startup.ActivitySplash'
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            log(f"✅ Launched {package} (activity)", "OK")
+            return True
+    except:
+        pass
+    
+    log(f"❌ Failed to launch {package}", "ERR")
+    return False
 
 # ============ SETUP ============
 def setup(config):
