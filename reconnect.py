@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Roblox Auto-Reconnect Tool v2.0
-For Cloud Phone (Redfinger, VMOS)
+Roblox Auto-Rejoin Tool v2.1
+EXACT COPY dari reference script, dengan sedikit modifikasi
 
 INSTALL:
     pkg update -y && pkg install python -y
-    curl -sO https://raw.githubusercontent.com/risxt/roblox-rejoin/main/reconnect.py
+    curl -o reconnect.py https://raw.githubusercontent.com/risxt/roblox-rejoin/main/reconnect.py
     python reconnect.py
 """
 
@@ -14,17 +14,27 @@ import time
 import sys
 import os
 import subprocess
-import re
 from datetime import datetime
 
-# ============ DEFAULT CONFIG ============
+# ============ CONFIGURATION ============
 DEFAULT_CONFIG = {
-    "place_id": "",
-    "link_code": "",
-    "packages": ["com.roblox.client"],
+    "place_id": 121864768012064,
+    "job_id": "45107399580631088032082953284064",
+    "package_name": "com.roblox.clienv",
+    "activity_name": ".startup.ActivitySplash",
     "check_interval": 5,
-    "launch_delay": 30
+    "rejoin_delay": 30,
 }
+
+# ============ GLOBAL STATE ============
+class State:
+    running = True
+    rejoins = 0
+    start_time = None
+    last_check = None
+    roblox_running = False
+
+state = State()
 
 # ============ COLORS ============
 class C:
@@ -32,54 +42,72 @@ class C:
     G = '\033[92m'
     Y = '\033[93m'
     B = '\033[94m'
-    N = '\033[96m'
+    C = '\033[96m'
     X = '\033[0m'
-    BOLD = '\033[1m'
 
-# ============ GLOBALS ============
-running = True
-stats = {}
-
-# ============ HELPER FUNCTIONS ============
-def log(msg, level="INFO"):
-    ts = datetime.now().strftime("%H:%M:%S")
-    colors = {"INFO": C.B, "OK": C.G, "WARN": C.Y, "ERR": C.R, "CRASH": C.R + C.BOLD}
-    c = colors.get(level, C.X)
-    print(f"{C.N}[{ts}]{C.X} {c}[{level}]{C.X} {msg}")
-
-def run_cmd(cmd):
-    """Run shell command with root"""
+# ============ LAUNCHER ============
+def launch_game(package, activity, place_id, job_id=""):
+    """EXACT COPY from reference script"""
+    if job_id and ("roblox.com/share" in job_id or "ro.blox.com" in job_id):
+        url = job_id
+    elif job_id:
+        url = f"roblox://placeId={place_id}&linkCode={job_id}"
+    else:
+        url = f"roblox://placeId={place_id}"
+    
+    # Method 1: Direct am start
+    cmd = f'am start -a android.intent.action.VIEW -d "{url}"'
     try:
-        result = subprocess.run(f'su -c "{cmd}"', shell=True, capture_output=True, text=True, timeout=15)
-        return result.returncode == 0, result.stdout.strip()
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if r.returncode == 0:
+            return True
     except:
-        return False, ""
+        pass
+    
+    # Method 2: With package
+    cmd2 = f'am start -a android.intent.action.VIEW -d "{url}" -p {package}'
+    try:
+        r = subprocess.run(cmd2, shell=True, capture_output=True, text=True)
+        return r.returncode == 0
+    except:
+        pass
+    
+    # Method 3: Start activity directly
+    cmd3 = f'am start -n {package}/{activity}'
+    try:
+        subprocess.run(cmd3, shell=True)
+        return True
+    except:
+        return False
 
+def stop_app(package):
+    try:
+        subprocess.run(f"am force-stop {package}", shell=True)
+    except:
+        pass
+
+# ============ MONITOR ============
+def is_running(package):
+    """EXACT COPY from reference script"""
+    try:
+        r = subprocess.run(f"pgrep -f {package}", shell=True, capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return True
+        r = subprocess.run(f"ps -A | grep {package}", shell=True, capture_output=True, text=True)
+        return bool(r.stdout.strip())
+    except:
+        return False
+
+# ============ MAIN ============
 def banner():
     print(f"""
-{C.N}{C.BOLD}
-╔═══════════════════════════════════════╗
-║   ROBLOX AUTO-RECONNECT TOOL v2.0     ║
+{C.C}╔═══════════════════════════════════════╗
+║   ROBLOX AUTO-REJOIN TOOL v2.1        ║
 ╠═══════════════════════════════════════╣
-║  For Cloud Phone (Redfinger/VMOS)     ║
+║   EXACT COPY dari Reference Script    ║
 ╚═══════════════════════════════════════╝{C.X}
     """)
 
-# ============ URL PARSER ============
-def parse_url(url):
-    """Extract PlaceID and LinkCode from URL"""
-    patterns = [
-        r'games/(\d+).*?privateServerLinkCode=([A-Za-z0-9_-]+)',
-        r'placeId=(\d+).*?launchData=([A-Za-z0-9_-]+)',
-        r'games/(\d+).*?code=([A-Za-z0-9_-]+)',
-    ]
-    for p in patterns:
-        m = re.search(p, url, re.IGNORECASE)
-        if m:
-            return m.group(1), m.group(2)
-    return None, None
-
-# ============ CONFIG ============
 def load_config():
     if os.path.exists("config.json"):
         try:
@@ -87,226 +115,61 @@ def load_config():
                 return json.load(f)
         except:
             pass
-    return DEFAULT_CONFIG.copy()
-
-def save_config(config):
+    
     with open("config.json", "w") as f:
-        json.dump(config, f, indent=2)
-    print(f"{C.G}[✓] Config saved to config.json{C.X}")
+        json.dump(DEFAULT_CONFIG, f, indent=2)
+    
+    print(f"{C.Y}[!] config.json created! Edit with nano config.json{C.X}")
+    return DEFAULT_CONFIG
 
-# ============ PROCESS CHECK ============
-def is_running(package):
-    """Check if package is running using multiple methods"""
-    # Method 1: pgrep
-    ok, out = run_cmd(f"pgrep -f {package}")
-    if ok and out:
-        return True
-    
-    # Method 2: ps | grep
-    ok, out = run_cmd(f"ps -A | grep {package}")
-    if ok and out:
-        return True
-    
-    # Method 3: pidof
-    ok, out = run_cmd(f"pidof {package}")
-    if ok and out:
-        return True
-    
-    return False
-
-# ============ LAUNCHER ============
-def launch_game(package, place_id, link_code):
-    """Launch Roblox to private server - COMPONENT LAUNCH FIRST (no chooser)"""
-    
-    # URL for deep link
-    url = f"roblox://placeId={place_id}&linkCode={link_code}"
-    
-    # METHOD 1: Component launch (MOST SPECIFIC - NO CHOOSER!)
-    # This directly launches the specific package's activity
-    component = f"{package}/com.roblox.client.startup.ActivitySplash"
-    cmd = f'am start -n {component} -a android.intent.action.VIEW -d "{url}"'
-    try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-        if r.returncode == 0 and "Error" not in r.stderr:
-            log(f"✅ Launched {package}", "OK")
-            return True
-    except:
-        pass
-    
-    # METHOD 2: Package launch with -p flag
-    cmd = f'am start -a android.intent.action.VIEW -d "{url}" -p {package}'
-    try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-        if r.returncode == 0:
-            log(f"✅ Launched {package} (pkg)", "OK")
-            return True
-    except:
-        pass
-    
-    # METHOD 3: Just start activity (no URL)
-    cmd = f'am start -n {component}'
-    try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-        if r.returncode == 0:
-            log(f"✅ Launched {package} (activity only)", "OK")
-            return True
-    except:
-        pass
-    
-    log(f"❌ Failed to launch {package}", "ERR")
-    return False
-
-# ============ SETUP ============
-def setup(config):
-    print(f"\n{C.N}=== Setup ==={C.X}\n")
-    
-    # Private Server URL
-    print(f"{C.Y}[1] Enter Private Server URL:{C.X}")
-    url = input("    > ").strip()
-    
-    place_id, link_code = parse_url(url)
-    if place_id and link_code:
-        config["place_id"] = place_id
-        config["link_code"] = link_code
-        print(f"{C.G}    ✓ PlaceID: {place_id}{C.X}")
-        print(f"{C.G}    ✓ LinkCode: {link_code[:15]}...{C.X}")
-    else:
-        print(f"{C.R}    ✗ Could not parse URL!{C.X}")
-        return None
-    
-    # Packages
-    print(f"\n{C.Y}[2] Enter package names (comma separated):{C.X}")
-    print(f"    Example: com.roblox.clienv,com.roblox.clientw")
-    pkg_input = input("    > ").strip()
-    if pkg_input:
-        config["packages"] = [p.strip() for p in pkg_input.split(",")]
-        print(f"{C.G}    ✓ {len(config['packages'])} package(s) configured{C.X}")
-    
-    # Interval
-    print(f"\n{C.Y}[3] Check interval seconds [{config['check_interval']}]:{C.X}")
-    inp = input("    > ").strip()
-    if inp.isdigit():
-        config["check_interval"] = int(inp)
-    
-    # Delay
-    print(f"\n{C.Y}[4] Launch delay seconds [{config['launch_delay']}]:{C.X}")
-    inp = input("    > ").strip()
-    if inp.isdigit():
-        config["launch_delay"] = int(inp)
-    
-    # Save
-    save_config(config)
-    return config
-
-# ============ MONITOR ============
-def monitor(config):
-    global running, stats
-    
-    packages = config["packages"]
-    place_id = config["place_id"]
-    link_code = config["link_code"]
-    interval = config["check_interval"]
-    delay = config["launch_delay"]
-    
-    # Init stats
-    stats = {pkg: {"crashes": 0} for pkg in packages}
-    
-    print(f"\n{C.G}{C.BOLD}🚀 Starting monitor...{C.X}")
-    print(f"   Monitoring {len(packages)} package(s)")
-    print(f"   Interval: {interval}s | Delay: {delay}s")
-    print(f"   Press Ctrl+C to stop\n")
-    print(f"{C.N}{'='*50}{C.X}\n")
-    
-    # ===== INITIAL LAUNCH - Launch all apps at startup =====
-    log("Launching all apps...", "INFO")
-    for pkg in packages:
-        launch_game(pkg, place_id, link_code)
-        time.sleep(3)  # Small delay between launches
-    
-    log(f"All apps launched! Waiting {delay}s for load...", "OK")
-    time.sleep(delay)
-    print(f"{C.N}{'='*50}{C.X}\n")
-    
-    # ===== MONITOR LOOP =====
-    while running:
-        for pkg in packages:
-            if not running:
-                break
-            
-            if is_running(pkg):
-                log(f"✓ {pkg} running", "INFO")
-            else:
-                stats[pkg]["crashes"] += 1
-                log(f"💥 CRASH: {pkg} (#{stats[pkg]['crashes']})", "CRASH")
-                
-                if launch_game(pkg, place_id, link_code):
-                    log(f"⏳ Waiting {delay}s for load...", "INFO")
-                    time.sleep(delay)
-        
-        time.sleep(interval)
-
-# ============ MAIN ============
 def main():
-    global running
-    
     banner()
-    
-    # Check root
-    log("Checking root access...")
-    ok, out = run_cmd("id")
-    if ok and "uid=0" in out:
-        log("Root access confirmed!", "OK")
-    else:
-        log("Root access not available!", "ERR")
-        print(f"{C.R}Please enable root and try again.{C.X}")
-        sys.exit(1)
-    
-    # Android optimization
-    log("Applying Android optimizations...")
-    run_cmd("device_config set_sync_disabled_for_tests persistent")
-    run_cmd("device_config put activity_manager max_phantom_processes 2147483647")
-    log("Optimizations applied", "OK")
-    
-    # Load config - NO PROMPTS, just load!
-    if not os.path.exists("config.json"):
-        print(f"\n{C.R}[!] config.json not found!{C.X}")
-        print(f"{C.Y}    Create config.json with this format:{C.X}")
-        print(f'''
-{{
-  "place_id": "YOUR_PLACE_ID",
-  "link_code": "YOUR_PRIVATE_SERVER_CODE",
-  "packages": ["com.roblox.client1", "com.roblox.client2"],
-  "check_interval": 5,
-  "launch_delay": 30
-}}
-        ''')
-        print(f"{C.Y}    Use: nano config.json{C.X}")
-        sys.exit(1)
     
     config = load_config()
     
-    # Validate config
-    if not config.get("place_id") or not config.get("link_code"):
-        print(f"{C.R}[!] Invalid config! Edit config.json with nano{C.X}")
-        sys.exit(1)
-    
-    # Show config
-    print(f"\n{C.G}[✓] Config loaded:{C.X}")
-    print(f"    PlaceID:  {config['place_id']}")
-    print(f"    Packages: {', '.join(config['packages'])}")
+    print(f"{C.B}[*] Current Config:{C.X}")
+    print(f"    PlaceId:  {config['place_id']}")
+    print(f"    JobId:    {config.get('job_id', '') or '(random)'}")
+    print(f"    Package:  {config['package_name']}")
     print(f"    Interval: {config['check_interval']}s")
-    print(f"    Delay:    {config['launch_delay']}s")
     
-    # Start monitor directly - NO PROMPTS!
+    package = config['package_name']
+    activity = config.get('activity_name', '.startup.ActivitySplash')
+    place_id = config['place_id']
+    job_id = config.get('job_id', '')
+    interval = config.get('check_interval', 5)
+    delay = config.get('rejoin_delay', 30)
+    
+    state.start_time = datetime.now()
+    
+    print(f"\n{C.G}[*] Starting monitor...{C.X}")
+    print(f"{C.Y}[!] Press Ctrl+C to stop{C.X}\n")
+    
+    # Initial launch
+    print(f"{C.B}[*] Launching game...{C.X}")
+    launch_game(package, activity, place_id, job_id)
+    time.sleep(10)
+    
     try:
-        monitor(config)
+        while state.running:
+            state.last_check = datetime.now().strftime("%H:%M:%S")
+            state.roblox_running = is_running(package)
+            
+            if state.roblox_running:
+                print(f"{C.G}[{state.last_check}] ✓ Roblox running. Next check in {interval}s{C.X}")
+            else:
+                state.rejoins += 1
+                print(f"{C.R}[{state.last_check}] 💥 DC detected! Rejoining... (#{state.rejoins}){C.X}")
+                
+                time.sleep(delay)
+                launch_game(package, activity, place_id, job_id)
+                time.sleep(10)
+            
+            time.sleep(interval)
+            
     except KeyboardInterrupt:
-        running = False
-        print(f"\n\n{C.Y}🛑 Stopped{C.X}")
-        print(f"\n{C.N}📊 Stats:{C.X}")
-        for pkg, s in stats.items():
-            print(f"   {pkg}: {s['crashes']} crash(es)")
-        print(f"\n{C.G}Goodbye! 👋{C.X}\n")
+        state.running = False
+        print(f"\n\n{C.Y}[*] Stopped. Total rejoins: {state.rejoins}{C.X}")
 
 if __name__ == "__main__":
     main()
