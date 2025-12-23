@@ -1,0 +1,11 @@
+{
+    "place_id": "121864768012064",
+    "link_code": "45107399580631088032082953284064",
+    "packages": [
+        "com.roblox.clienv",
+        "com.roblox.clientw",
+        "com.roblox.clientx"
+    ],
+    "check_interval": 5,
+    "launch_delay": 30
+}
