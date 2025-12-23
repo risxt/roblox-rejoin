@@ -200,6 +200,17 @@ def monitor(config):
     print(f"   Press Ctrl+C to stop\n")
     print(f"{C.N}{'='*50}{C.X}\n")
     
+    # ===== INITIAL LAUNCH - Launch all apps at startup =====
+    log("Launching all apps...", "INFO")
+    for pkg in packages:
+        launch_game(pkg, place_id, link_code)
+        time.sleep(3)  # Small delay between launches
+    
+    log(f"All apps launched! Waiting {delay}s for load...", "OK")
+    time.sleep(delay)
+    print(f"{C.N}{'='*50}{C.X}\n")
+    
+    # ===== MONITOR LOOP =====
     while running:
         for pkg in packages:
             if not running:
