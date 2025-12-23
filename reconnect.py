@@ -87,25 +87,28 @@ class RobloxReconnect:
     
     def run_root_command(self, command: str) -> Tuple[bool, str]:
         """Execute command with root privileges"""
-        try:
-            # Try tsu first (Termux specific), fallback to su
-            for root_cmd in ["tsu -c", "su -c"]:
-                try:
-                    result = subprocess.run(
-                        f'{root_cmd} "{command}"',
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
+        # Try su first (more universal), then tsu (Termux specific)
+        for root_cmd in ["su -c", "tsu -c"]:
+            try:
+                result = subprocess.run(
+                    f'{root_cmd} "{command}"',
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=15
+                )
+                # Check if command succeeded
+                if result.returncode == 0 and result.stdout.strip():
                     return True, result.stdout.strip()
-                except FileNotFoundError:
-                    continue
-            return False, "Root command not available"
-        except subprocess.TimeoutExpired:
-            return False, "Command timeout"
-        except Exception as e:
-            return False, str(e)
+                elif result.returncode == 0:
+                    return True, ""
+            except FileNotFoundError:
+                continue
+            except subprocess.TimeoutExpired:
+                return False, "Command timeout"
+            except Exception:
+                continue
+        return False, "Root command not available"
     
     def check_root_access(self) -> bool:
         """Verify root access is available"""
